@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 
@@ -9,6 +10,9 @@ from ..config import settings
 
 class LLMAnswerer:
     """可选 OpenAI-compatible 适配器，支持 Chat Completions 和 Responses API。"""
+
+    def __init__(self) -> None:
+        self.last_error: str | None = None
 
     def enabled(self) -> bool:
         return bool(settings.llm_provider != "none" and settings.llm_base_url and settings.llm_api_key)
@@ -24,6 +28,8 @@ class LLMAnswerer:
 
     @staticmethod
     def _extract_content(body: dict, responses_api: bool) -> str | None:
+        if not isinstance(body, dict):
+            return None
         if responses_api:
             direct = body.get("output_text")
             if isinstance(direct, str):
@@ -52,11 +58,19 @@ class LLMAnswerer:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             value = "\n".join(lines).strip()
-        parsed = json.loads(value)
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            start = value.find("{")
+            if start < 0:
+                raise
+            parsed, _end = json.JSONDecoder().raw_decode(value[start:])
         return parsed if isinstance(parsed, dict) else None
 
     async def complete(self, question: str, evidence: list[dict], web_results: list[dict] | None = None) -> dict | None:
+        self.last_error = None
         if not self.enabled():
+            self.last_error = "not_configured"
             return None
         context = "\n\n".join(
             f"[教材证据 {item.get('material_id')}] {item.get('title')} {item.get('source_anchor')}\n{item.get('snippet')}"
@@ -71,12 +85,19 @@ class LLMAnswerer:
         endpoint = settings.llm_base_url.rstrip("/")
         responses_api = self._is_responses_endpoint(endpoint)
         if responses_api:
-            payload = {"model": settings.llm_model, "temperature": 0.1, "instructions": instructions, "input": prompt}
+            payload = {
+                "model": settings.llm_model,
+                "max_output_tokens": 1024,
+                "reasoning": {"effort": "none"},
+                "instructions": instructions,
+                "input": prompt,
+            }
         else:
             endpoint = LLMAnswerer._chat_endpoint(endpoint)
             payload = {
                 "model": settings.llm_model,
-                "temperature": 0.1,
+                "max_tokens": 1024,
+                "thinking": {"type": "disabled"},
                 "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}],
             }
         try:
@@ -85,15 +106,40 @@ class LLMAnswerer:
                 response.raise_for_status()
                 content = self._extract_content(response.json(), responses_api)
                 if not content:
+                    self.last_error = "empty_content"
                     return None
                 parsed = self._parse_json(content)
                 if not parsed:
+                    self.last_error = "invalid_json"
                     return None
                 valid_ids = {str(item.get("material_id")) for item in evidence}
                 raw_ids = parsed.get("evidence_ids", [])
-                parsed["evidence_ids"] = [int(item) for item in raw_ids if str(item) in valid_ids]
-                return {**parsed, "provider": settings.llm_provider} if parsed.get("answer") and parsed["evidence_ids"] else None
-        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                if not isinstance(raw_ids, list):
+                    self.last_error = "invalid_evidence_ids"
+                    return None
+                normalized_ids: list[int] = []
+                for item in raw_ids:
+                    text = str(item).strip()
+                    if text.isdigit():
+                        candidate = text
+                    else:
+                        match = re.fullmatch(r"\[?教材证据\s+(\d+)\]?", text)
+                        candidate = match.group(1) if match else ""
+                    if candidate in valid_ids:
+                        normalized_ids.append(int(candidate))
+                parsed["evidence_ids"] = list(dict.fromkeys(normalized_ids))
+                if not parsed.get("answer") or not parsed["evidence_ids"]:
+                    self.last_error = "missing_answer_or_valid_evidence"
+                    return None
+                return {**parsed, "provider": settings.llm_provider}
+        except httpx.HTTPStatusError as exc:
+            self.last_error = f"upstream_http_{exc.response.status_code}"
+            return None
+        except httpx.HTTPError as exc:
+            self.last_error = f"transport_{exc.__class__.__name__}"
+            return None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.last_error = f"response_{exc.__class__.__name__}"
             return None
 
 def build_local_answer(question: str, evidence: list[dict]) -> dict:

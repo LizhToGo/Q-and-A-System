@@ -46,7 +46,7 @@ def _evidence():
 
 def test_responses_api_uses_input_and_output_text(monkeypatch):
     FakeAsyncClient.calls = []
-    FakeAsyncClient.response_body = {"output_text": "```json\n{\"answer\": \"4 kHz\", \"evidence_ids\": [\"7\"]}\n```"}
+    FakeAsyncClient.response_body = {"output_text": "```json\n{\"answer\": \"4 kHz\", \"evidence_ids\": [\"教材证据 7\"]}\n```"}
     monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
     monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
 
@@ -70,3 +70,20 @@ def test_chat_completions_remains_supported(monkeypatch):
     url, payload = FakeAsyncClient.calls[0]
     assert url == "https://example.test/v1/chat/completions"
     assert "messages" in payload and "input" not in payload
+
+def test_model_text_cannot_forge_evidence_id_from_arbitrary_suffix(monkeypatch):
+    FakeAsyncClient.calls = []
+    FakeAsyncClient.response_body = {"choices": [{"message": {"content": "{\"answer\": \"4 kHz\", \"evidence_ids\": [\"我猜是 7\"]}"}}]}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/chat/completions"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = asyncio.run(LLMAnswerer().complete("最高频率？", _evidence()))
+
+    assert result is None
+
+
+def test_json_parser_accepts_surrounding_model_text():
+    assert LLMAnswerer._parse_json('结果如下：{"answer":"4 kHz","evidence_ids":[7]}谢谢') == {
+        "answer": "4 kHz",
+        "evidence_ids": [7],
+    }

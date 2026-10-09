@@ -23,8 +23,8 @@ def _load_local_env(path: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        if key:
-            os.environ.setdefault(key, value)
+        if key and not os.environ.get(key):
+            os.environ[key] = value
 
 
 _load_local_env(ROOT_DIR / ".env")

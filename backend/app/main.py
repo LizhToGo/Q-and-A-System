@@ -81,13 +81,23 @@ async def ask_answer(request: AskRequest, db: Session = Depends(get_db)):
     evidence = search_evidence(db, request.question, request.course_id, request.topic_id, limit=10)
     evidence_payload = [evidence_dict(item) for item in evidence]
     web_results = await WebSearchProvider().search(request.question) if request.use_web else []
-    model_draft = await LLMAnswerer().complete(request.question, evidence_payload, web_results)
+    answerer = LLMAnswerer()
+    model_draft = await answerer.complete(request.question, evidence_payload, web_results)
     draft = model_draft or build_local_answer(request.question, evidence_payload)
     answer = str(draft.get("answer", "")).strip() or "当前没有生成可校验的回答。"
     evidence_ids = {item.material_id for item in evidence}
     requested_ids = [item for item in draft.get("evidence_ids", []) if item in evidence_ids]
     evidence, results, confidence, traceability, agent_trace = ValidationAgent(db).run(request.question, answer, request.course_id, request.topic_id, requested_ids or None)
-    agent_trace = [{"step": "answer_generation", "status": "completed", "provider": draft.get("provider", settings.llm_provider), "evidence_ids": sorted(evidence_ids), "web_results": len(web_results)}] + agent_trace
+    generation_trace = {
+        "step": "answer_generation",
+        "status": "model" if model_draft else "fallback",
+        "provider": draft.get("provider", settings.llm_provider),
+        "evidence_ids": sorted(evidence_ids),
+        "web_results": len(web_results),
+    }
+    if answerer.last_error:
+        generation_trace["fallback_reason"] = answerer.last_error
+    agent_trace = [generation_trace] + agent_trace
     record = AnswerRecord(question=request.question, answer=answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace})
     db.add(record)
     db.flush()
