@@ -107,7 +107,7 @@ python -m backend.build_knowledge `
 - 重复执行审核发布，结果为 `published=0, skipped=563`，证明按文档哈希、页码和 `source_anchor` 幂等；
 - 当前检索接口按材料片段返回结果，因此同一页可能出现多个候选；本次结果中第 58、66 页各出现重复片段，另外还命中了未验证的演示材料，后续应增加按 `source_anchor` 去重和课程数据隔离。
 - 使用这两条真实材料校验“奈奎斯特抽样定理要求什么？”时，结果为 `text=pass`、`formula=unknown`、`numeric=not_applicable`、`cross_modal=not_applicable`，追溯状态为 `traced`；
-- 之前一次运行进程环境实际使用了 Chat Completions 地址（进程环境变量优先于本地 `.env`），返回 `choices[0].message.content` 空字符串；明确把运行时 `LLM_BASE_URL` 设为 `/v1/responses` 后，第 59 页真实辅助返回 `200`，生成文本长度为 `359`、`confidence=0.35`，但仍保持 `pending`。代码对空输出只做一次有界兼容重试，对非空非法 JSON 做一次自动修复；低置信度结果目前不会自动批准。
+- 之前一次运行进程环境实际使用了 Chat Completions 地址（进程环境变量优先于本地 `.env`），返回 `choices[0].message.content` 空字符串；明确把运行时 `LLM_BASE_URL` 设为 `/v1/responses` 后，第 59 页真实辅助首轮调用返回 `200`，生成文本长度为 `359`、`confidence=0.35`，但仍保持 `pending`。代码对空输出只做一次有界兼容重试，对非空非法 JSON 做一次自动修复；低置信度结果目前不会自动批准。此次真实调用没有强制制造空输出，因此“空输出后重试成功”仅由 mock 回归测试覆盖。
 
 
 ## DeepSeek 配置
