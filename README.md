@@ -98,6 +98,15 @@ python -m backend.build_knowledge `
 
 审批阶段会校验教材文件哈希、页码、来源锚点和原文哈希；源文件发生变化时拒绝发布。重复执行按文档哈希、页码和 `source_anchor` 幂等，不会重复创建材料。审核清单可能包含教材摘录，默认不提交到 GitHub；应在部署环境单独保存或由课程组审核后管理。
 
+### 已验证的真实教材样例
+当前本地验收使用《数字信号处理教程（第五版）》第 58、66 页：
+
+- 构建审核清单后，明确审核通过并发布 `2` 条材料，首次发布结果为 `published=2, skipped=561`；
+- 重复执行审核发布，结果为 `published=0, skipped=563`，证明按文档哈希、页码和 `source_anchor` 幂等；
+- 检索结果包含 `doc:1:p58`、`doc:1:p66`，两条材料均为 `verified=true`；
+- 使用这两条真实材料校验“奈奎斯特抽样定理要求什么？”时，结果为 `text=pass`、`formula=unknown`、`numeric=not_applicable`、`cross_modal=not_applicable`，追溯状态为 `traced`；
+- 对真实教材第 59 页执行 Responses 文本辅助时，上游返回了无法解析的 JSON，接口返回 `503`；该页保持待审核，不阻塞无模型的构建、审核和发布流程。
+
 
 ## DeepSeek 配置
 
