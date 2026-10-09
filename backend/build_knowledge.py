@@ -13,7 +13,11 @@ from backend.app.services.ingestion.service import create_ingestion_job, list_jo
 
 
 SCHEMA_VERSION = 1
-_NUMERIC_HINT = re.compile(r"\d|[０-９零〇一二三四五六七八九十百千万亿两半]|百分之|倍|[%％]|(?:kHz|MHz|GHz|Hz|V|A|Ω|W|dB|ms|μs|s)\b", re.I)
+_NUMERIC_HINT = re.compile(r"\d|[０-９]|[%％]|(?:kHz|MHz|GHz|Hz|V|A|Ω|W|dB|ms|μs|s)\b", re.I)
+_CHINESE_QUANTITY_HINT = re.compile(
+    r"(?:[零〇一二三四五六七八九十百千万亿两半]+)\s*(?:倍|分之|赫兹|千赫兹|兆赫兹|伏特|安培|欧姆|瓦|秒|毫秒|微秒|米|厘米|毫米|%|％)"
+    r"|百分之[零〇一二三四五六七八九十百千万亿两半]+"
+)
 _FORMULA_HINT = re.compile(r"[A-Za-z][A-Za-z0-9_{}]*\s*[=<>≥≤]")
 
 
@@ -72,6 +76,7 @@ def _is_low_risk_text(item: Any) -> bool:
         and len(raw_text) >= 80
         and normalized_text == raw_text
         and not _NUMERIC_HINT.search(raw_text)
+        and not _CHINESE_QUANTITY_HINT.search(raw_text)
         and not _FORMULA_HINT.search(raw_text)
         and not payload.get("needs_ocr")
         and not payload.get("ocr_engine")

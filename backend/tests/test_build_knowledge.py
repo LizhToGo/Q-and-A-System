@@ -125,3 +125,17 @@ def test_low_risk_gate_rejects_chinese_quantity_words():
     )
 
     assert _is_low_risk_text(item) is False
+
+
+def test_low_risk_gate_allows_ordinary_chinese_words():
+    text = "一般来说，一个基础概念的普通说明文字可以保持原文不变并进入自动审核路径，且没有数字或单位。"
+    text += "这类内容只需要保留来源锚点和原始文本哈希，不包含计算、测量或图形解释。"
+    item = SimpleNamespace(
+        item_type="text",
+        raw_text=text,
+        normalized_text=text,
+        payload={},
+        confidence=0.95,
+    )
+
+    assert _is_low_risk_text(item) is True
