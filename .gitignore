@@ -16,3 +16,4 @@ data/uploads/
 *.pdf
 
 # Keep the generated evaluation report as a shareable project artifact.
+configs/*.review.json

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "jobs": [
+    {
+      "path": "../数字信号处理教程（第五版） (程佩青) (z-library.sk, 1lib.sk, z-lib.sk).pdf",
+      "course_id": 1,
+      "review_pages": [58, 66],
+      "ocr_pages": [],
+      "assist_pages": []
+    }
+  ]
+}

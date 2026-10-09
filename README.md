@@ -77,6 +77,27 @@ python -m backend.import_textbooks ".\信号与系统 (孙国霞) (z-library.sk,
 6. 调用 publish；
 7. 再通过检索和问答验证来源定位。
 
+## 可重复知识库构建
+不依赖 OMP 或浏览器；平台部署后可直接用命令行完成“解析 → 生成审核清单 → 人工确认 → 发布”。示例清单位于 `configs/dsp-sampling.json`：
+
+```powershell
+python -m backend.build_knowledge `
+  --manifest .\configs\dsp-sampling.json `
+  --output .\configs\dsp-sampling.review.json
+```
+
+构建阶段只创建/复用导入任务、按 `ocr_pages` 执行显式 OCR，并输出带教材哈希、页码、`source_anchor`、原文哈希和候选内容的 review manifest；不会自动发布。模型辅助只有在清单填写 `assist_pages` 时才调用，失败会记录到 `errors` 并保留待审核状态。
+
+人工检查 review manifest，将确认的条目标记为 `"approved": true`，再执行：
+
+```powershell
+python -m backend.build_knowledge `
+  --approve-manifest .\configs\dsp-sampling.review.json `
+  --publish
+```
+
+审批阶段会校验教材文件哈希、页码、来源锚点和原文哈希；源文件发生变化时拒绝发布。重复执行按文档哈希、页码和 `source_anchor` 幂等，不会重复创建材料。审核清单可能包含教材摘录，默认不提交到 GitHub；应在部署环境单独保存或由课程组审核后管理。
+
 
 ## DeepSeek 配置
 
