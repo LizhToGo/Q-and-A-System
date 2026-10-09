@@ -78,3 +78,53 @@ def test_assist_chat_fallback_remains_supported(monkeypatch):
 
     assert result == {"source_page": 31}
     assert FakeClient.calls[0][0] == "https://example.test/v1/chat/completions"
+
+
+def test_assist_json_parser_skips_explanation_example():
+    result = assist._json_content(
+        '说明 {"example": "not the result"}\n```json\n{"source_page": 31, "normalized_text": "采样定理"}\n```'
+    )
+
+    assert result["source_page"] == 31
+    assert result["normalized_text"] == "采样定理"
+
+
+def test_assist_responses_prefers_message_over_reasoning():
+    result = assist._response_content(
+        {
+            "output": [
+                {"type": "reasoning", "content": [{"type": "output_text", "text": "内部推理"}]},
+                {"type": "message", "content": [{"type": "output_text", "text": "{\"source_page\": 31}"}]},
+            ]
+        }
+    )
+
+    assert result == "{\"source_page\": 31}"
+
+
+def test_assist_repairs_invalid_json_once(monkeypatch):
+    responses = iter(["不是 JSON", "{\"source_page\": 31, \"normalized_text\": \"采样定理\"}"])
+    captured: list[list[dict[str, str]]] = []
+
+    def fake_request(messages):
+        captured.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(assist, "_request_content", fake_request)
+    result = assist._call_llm([{"role": "user", "content": "读取页面"}])
+
+    assert result["source_page"] == 31
+    assert len(captured) == 2
+    assert "不是 JSON" in captured[1][1]["content"]
+
+
+def test_assist_responses_text_input_uses_gateway_compatible_string(monkeypatch):
+    FakeClient.calls = []
+    FakeClient.response_body = {"output_text": "{\"source_page\": 31}"}
+    monkeypatch.setattr(assist, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(assist.httpx, "Client", FakeClient)
+
+    assist._call_llm([{"role": "user", "content": "读取页面"}])
+
+    payload = FakeClient.calls[0][1]
+    assert payload["input"] == "读取页面"
