@@ -88,7 +88,7 @@ python -m backend.build_knowledge `
 
 构建阶段只创建/复用导入任务、按 `ocr_pages` 执行显式 OCR，并输出带教材哈希、页码、`source_anchor`、原文哈希和候选内容的 review manifest；不会自动发布。模型辅助只有在清单填写 `assist_pages` 时才调用，失败会记录到 `errors` 并保留待审核状态。
 
-默认保持人工确认。若某个 job 显式设置 `"auto_approve_low_risk": true`，构建器只会自动批准原生纯文本：`item_type=text`、无 OCR/模型标记、无公式、无图片、原文与规范化文本一致且提取置信度不低于 `0.7`；自动项会写入 `approval_method=auto_low_risk_text`。公式、数值、波形、频谱、OCR 低置信度和模型整理结果不会走这条自动通路，仍进入审核清单。
+默认保持人工确认。若某个 job 显式设置 `"auto_approve_low_risk": true`，构建器只会自动批准原生纯文本：`item_type=text`、无 OCR/模型标记、无公式、无数字或常见单位、无图片、原文与规范化文本一致且提取置信度不低于 `0.7`；自动项会写入 `approval_method=auto_low_risk_text`。公式、数值、波形、频谱、OCR 低置信度和模型整理结果不会走这条自动通路，仍进入审核清单。
 
 人工检查 review manifest，将确认的条目标记为 `"approved": true`，再执行：
 
@@ -112,7 +112,7 @@ python -m backend.build_knowledge `
 
 ## DeepSeek 配置
 
-后端默认使用 OpenAI-compatible Responses API；适配器也保留 Chat Completions 兼容路径。当前 SDU 服务配置：
+后端只使用 OpenAI-compatible Responses API，不再根据配置自动切换到 Chat Completions。当前 SDU 服务配置：
 
 ```powershell
 $env:LLM_PROVIDER = "deepseek"

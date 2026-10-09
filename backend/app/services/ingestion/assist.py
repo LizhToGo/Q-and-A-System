@@ -108,10 +108,6 @@ def _prompt(item: ExtractedItem, *, context: str, mode: str) -> dict[str, Any]:
     }
 
 
-def _chat_endpoint(url: str) -> str:
-    endpoint = url.rstrip("/")
-    return endpoint if endpoint.endswith("/chat/completions") else f"{endpoint}/chat/completions"
-
 
 def _responses_endpoint(url: str) -> str:
     endpoint = url.rstrip("/")
@@ -233,37 +229,29 @@ def _responses_input_value(inputs: list[dict[str, Any]]) -> str | list[dict[str,
 def _request_content(messages: list[dict[str, Any]], *, compatibility_retry: bool = False) -> str:
     _require_llm()
     endpoint = settings.llm_base_url or ""
-    responses_api = endpoint.rstrip("/").endswith("/responses")
-    if responses_api:
-        instructions, inputs = _responses_input(messages)
-        input_value = _responses_input_value(inputs)
+    if not endpoint.rstrip("/").endswith("/responses"):
+        raise AssistUnavailable("当前系统只支持 Responses API；请将 LLM_BASE_URL 设置为 /v1/responses")
+    instructions, inputs = _responses_input(messages)
+    input_value = _responses_input_value(inputs)
+    payload = {
+        "model": settings.llm_model,
+        "max_output_tokens": 1024,
+        "reasoning": {"effort": "none"},
+        "instructions": instructions,
+        "input": input_value,
+        # SDU's /responses gateway currently requires messages and returns choices.
+        "messages": messages,
+    }
+    if compatibility_retry:
+        # Retry with the smallest Responses-compatible envelope when the
+        # gateway accepted the request but emitted an empty message.
         payload = {
             "model": settings.llm_model,
-            "max_output_tokens": 1024,
-            "reasoning": {"effort": "none"},
-            "instructions": instructions,
+            "max_output_tokens": 1536,
             "input": input_value,
-            # SDU's /responses gateway currently requires messages and returns choices.
             "messages": messages,
         }
-        if compatibility_retry:
-            # Retry with the smallest Responses-compatible envelope when the
-            # gateway accepted the request but emitted an empty message.
-            payload = {
-                "model": settings.llm_model,
-                "max_output_tokens": 1536,
-                "input": input_value,
-                "messages": messages,
-            }
-        endpoint = _responses_endpoint(endpoint)
-    else:
-        payload = {
-            "model": settings.llm_model,
-            "max_tokens": 1024,
-            "thinking": {"type": "disabled"},
-            "messages": messages,
-        }
-        endpoint = _chat_endpoint(endpoint)
+    endpoint = _responses_endpoint(endpoint)
     try:
         with httpx.Client(timeout=45) as client:
             response = client.post(endpoint, headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
@@ -275,7 +263,7 @@ def _request_content(messages: list[dict[str, Any]], *, compatibility_retry: boo
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise AssistUnavailable("模型响应体不是 JSON：JSONDecodeError") from exc
     try:
-        content = _response_content(body) if responses_api else body["choices"][0]["message"]["content"]
+        content = _response_content(body)
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise AssistUnavailable(
             f"模型响应结构缺少可用文本：{exc.__class__.__name__}；shape={_response_shape(body)}"

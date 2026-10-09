@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from backend.app.services.ingestion import assist
 
 
@@ -68,16 +70,13 @@ def test_assist_responses_gateway_choices_shape(monkeypatch):
 
     assert result == {"source_page": 31}
     assert "messages" in FakeClient.calls[0][1]
-def test_assist_chat_fallback_remains_supported(monkeypatch):
-    FakeClient.calls = []
-    FakeClient.response_body = {"choices": [{"message": {"content": "{\"source_page\": 31}"}}]}
+
+
+def test_assist_rejects_chat_endpoint(monkeypatch):
     monkeypatch.setattr(assist, "settings", _settings("https://example.test/v1/chat/completions"))
-    monkeypatch.setattr(assist.httpx, "Client", FakeClient)
 
-    result = assist._call_llm([{"role": "user", "content": "读取页面"}])
-
-    assert result == {"source_page": 31}
-    assert FakeClient.calls[0][0] == "https://example.test/v1/chat/completions"
+    with pytest.raises(assist.AssistUnavailable, match="只支持 Responses API"):
+        assist._call_llm([{"role": "user", "content": "读取页面"}])
 
 
 def test_assist_json_parser_skips_explanation_example():

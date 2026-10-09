@@ -9,7 +9,7 @@ from ..config import settings
 
 
 class LLMAnswerer:
-    """可选 OpenAI-compatible 适配器，支持 Chat Completions 和 Responses API。"""
+    """可选 OpenAI-compatible Responses API 适配器。"""
 
     def __init__(self) -> None:
         self.last_error: str | None = None
@@ -20,32 +20,37 @@ class LLMAnswerer:
     @staticmethod
     def _is_responses_endpoint(url: str) -> bool:
         return url.rstrip("/").endswith("/responses")
-    @staticmethod
-    def _chat_endpoint(url: str) -> str:
-        endpoint = url.rstrip("/")
-        return endpoint if endpoint.endswith("/chat/completions") else f"{endpoint}/chat/completions"
-
 
     @staticmethod
-    def _extract_content(body: dict, responses_api: bool) -> str | None:
+    def _extract_content(body: dict) -> str | None:
         if not isinstance(body, dict):
             return None
-        if responses_api:
-            direct = body.get("output_text")
-            if isinstance(direct, str):
-                return direct
-            for output in body.get("output", []):
-                if not isinstance(output, dict):
+        direct = body.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct
+        message_text: list[str] = []
+        output_text: list[str] = []
+        for output in body.get("output", []):
+            if not isinstance(output, dict):
+                continue
+            is_message = output.get("type") == "message"
+            for content in output.get("content", []):
+                if not isinstance(content, dict) or not isinstance(content.get("text"), str):
                     continue
-                for content in output.get("content", []):
-                    if isinstance(content, dict) and isinstance(content.get("text"), str):
-                        return content["text"]
+                if is_message:
+                    message_text.append(content["text"])
+                elif content.get("type") == "output_text":
+                    output_text.append(content["text"])
+        if message_text:
+            return message_text[0]
+        if output_text:
+            return output_text[0]
         choices = body.get("choices", [])
-        if not choices or not isinstance(choices[0], dict):
-            return None
-        message = choices[0].get("message", {})
-        content = message.get("content") if isinstance(message, dict) else None
-        return content if isinstance(content, str) else None
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message", {})
+            content = message.get("content") if isinstance(message, dict) else None
+            return content if isinstance(content, str) else None
+        return None
 
     @staticmethod
     def _parse_json(content: str) -> dict | None:
@@ -83,30 +88,23 @@ class LLMAnswerer:
         prompt = f"问题：{question}\n教材证据：\n{context or '无'}\n网络补充：\n{web_context or '无'}"
         messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
         endpoint = settings.llm_base_url.rstrip("/")
-        responses_api = self._is_responses_endpoint(endpoint)
-        if responses_api:
-            payload = {
-                "model": settings.llm_model,
-                "max_output_tokens": 1024,
-                "reasoning": {"effort": "none"},
-                "instructions": instructions,
-                "input": prompt,
-                # SDU's /responses gateway currently requires messages and returns choices.
-                "messages": messages,
-            }
-        else:
-            endpoint = LLMAnswerer._chat_endpoint(endpoint)
-            payload = {
-                "model": settings.llm_model,
-                "max_tokens": 1024,
-                "thinking": {"type": "disabled"},
-                "messages": messages,
-            }
+        if not self._is_responses_endpoint(endpoint):
+            self.last_error = "responses_only"
+            return None
+        payload = {
+            "model": settings.llm_model,
+            "max_output_tokens": 1024,
+            "reasoning": {"effort": "none"},
+            "instructions": instructions,
+            "input": prompt,
+            # SDU's /responses gateway currently requires messages and returns choices.
+            "messages": messages,
+        }
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(endpoint, headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
                 response.raise_for_status()
-                content = self._extract_content(response.json(), responses_api)
+                content = self._extract_content(response.json())
                 if not content:
                     self.last_error = "empty_content"
                     return None

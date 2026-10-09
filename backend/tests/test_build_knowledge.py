@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 from backend.app.db import SessionLocal
 from backend.app.models import Material
-from backend.build_knowledge import apply_review_manifest, build_review_manifest
+from backend.build_knowledge import _is_low_risk_text, apply_review_manifest, build_review_manifest
+
 
 
 def test_review_manifest_requires_explicit_approval_and_is_idempotent(client, tmp_path):
@@ -44,9 +46,9 @@ def test_review_manifest_requires_explicit_approval_and_is_idempotent(client, tm
 def test_low_risk_native_text_can_be_auto_approved(client, tmp_path):
     source = tmp_path / "clean.md"
     source.write_text(
-        "1.1 采样定理\n\n"
-        "抽样频率必须大于信号最高频率的两倍，才能避免周期延拓后的频谱发生混叠。"
-        "这是一段没有公式、图像或 OCR 标记的原生教材文本，用于验证低风险纯文本可以走自动审核路径。",
+        "采样定理\n\n"
+        "本节介绍基础课程概念，说明教材正文、章节标题和普通说明文字可以保持原文不变，"
+        "并且不依赖特殊符号或外部处理即可进入低风险自动审核路径，审核后仍保留原始来源锚点。",
         encoding="utf-8",
     )
     manifest_path = tmp_path / "build.json"
@@ -80,3 +82,46 @@ def test_low_risk_native_text_can_be_auto_approved(client, tmp_path):
         assert published["jobs"][0]["published"] == 1
     finally:
         db.close()
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        SimpleNamespace(
+            item_type="formula",
+            raw_text="普通教材说明文字足够长但类型是公式。",
+            normalized_text="普通教材说明文字足够长但类型是公式。",
+            payload={},
+            confidence=0.95,
+        ),
+        SimpleNamespace(
+            item_type="text",
+            raw_text="采样频率 fs=8000 Hz，包含数字和公式。",
+            normalized_text="采样频率 fs=8000 Hz，包含数字和公式。",
+            payload={},
+            confidence=0.95,
+        ),
+        SimpleNamespace(
+            item_type="text",
+            raw_text="这是一段足够长的 OCR 文本，不能因为模型置信度较高就自动发布。",
+            normalized_text="这是一段足够长的 OCR 文本，不能因为模型置信度较高就自动发布。",
+            payload={"needs_ocr": True},
+            confidence=0.95,
+        ),
+    ],
+)
+def test_low_risk_gate_rejects_risky_items(item):
+    assert _is_low_risk_text(item) is False
+
+
+def test_low_risk_gate_rejects_chinese_quantity_words():
+    text = "该信号幅度提高两倍后仍需检查单位和边界，不能仅按普通正文自动发布。"
+    item = SimpleNamespace(
+        item_type="text",
+        raw_text=text,
+        normalized_text=text,
+        payload={},
+        confidence=0.95,
+    )
+
+    assert _is_low_risk_text(item) is False

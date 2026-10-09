@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,8 @@ from backend.app.services.ingestion.service import create_ingestion_job, list_jo
 
 
 SCHEMA_VERSION = 1
+_NUMERIC_HINT = re.compile(r"\d|[０-９零〇一二三四五六七八九十百千万亿两半]|百分之|倍|[%％]|(?:kHz|MHz|GHz|Hz|V|A|Ω|W|dB|ms|μs|s)\b", re.I)
+_FORMULA_HINT = re.compile(r"[A-Za-z][A-Za-z0-9_{}]*\s*[=<>≥≤]")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -68,6 +71,8 @@ def _is_low_risk_text(item: Any) -> bool:
         item.item_type == "text"
         and len(raw_text) >= 80
         and normalized_text == raw_text
+        and not _NUMERIC_HINT.search(raw_text)
+        and not _FORMULA_HINT.search(raw_text)
         and not payload.get("needs_ocr")
         and not payload.get("ocr_engine")
         and not payload.get("llm_provider")

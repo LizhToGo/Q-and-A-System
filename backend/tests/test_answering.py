@@ -59,23 +59,22 @@ def test_responses_api_uses_input_and_output_text(monkeypatch):
     assert payload["reasoning"] == {"effort": "none"}
 
 
-def test_chat_completions_remains_supported(monkeypatch):
+def test_non_responses_endpoint_is_rejected(monkeypatch):
     FakeAsyncClient.calls = []
-    FakeAsyncClient.response_body = {"choices": [{"message": {"content": "{\"answer\": \"4 kHz\", \"evidence_ids\": [7]}"}}]}
     monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/chat/completions"))
     monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
 
-    result = asyncio.run(LLMAnswerer().complete("最高频率？", _evidence()))
+    answerer = LLMAnswerer()
+    result = asyncio.run(answerer.complete("最高频率？", _evidence()))
 
-    assert result == {"answer": "4 kHz", "evidence_ids": [7], "provider": "deepseek"}
-    url, payload = FakeAsyncClient.calls[0]
-    assert url == "https://example.test/v1/chat/completions"
-    assert "messages" in payload and "input" not in payload
+    assert result is None
+    assert answerer.last_error == "responses_only"
+    assert FakeAsyncClient.calls == []
 
 def test_model_text_cannot_forge_evidence_id_from_arbitrary_suffix(monkeypatch):
     FakeAsyncClient.calls = []
     FakeAsyncClient.response_body = {"choices": [{"message": {"content": "{\"answer\": \"4 kHz\", \"evidence_ids\": [\"我猜是 7\"]}"}}]}
-    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/chat/completions"))
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
     monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
 
     result = asyncio.run(LLMAnswerer().complete("最高频率？", _evidence()))
