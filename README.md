@@ -103,7 +103,7 @@ python -m backend.build_knowledge `
 
 - 构建审核清单后，明确审核通过并发布 `2` 条材料，首次发布结果为 `published=2, skipped=561`；
 - 重复执行审核发布，结果为 `published=0, skipped=563`，证明按文档哈希、页码和 `source_anchor` 幂等；
-- 检索结果包含 `doc:1:p58`、`doc:1:p66`，两条材料均为 `verified=true`；
+- 当前检索接口按材料片段返回结果，因此同一页可能出现多个候选；本次结果中第 58、66 页各出现重复片段，另外还命中了未验证的演示材料，后续应增加按 `source_anchor` 去重和课程数据隔离。
 - 使用这两条真实材料校验“奈奎斯特抽样定理要求什么？”时，结果为 `text=pass`、`formula=unknown`、`numeric=not_applicable`、`cross_modal=not_applicable`，追溯状态为 `traced`；
 - 对真实教材第 59 页执行 Responses 文本辅助时，上游返回了无法解析的 JSON，接口返回 `503`；该页保持待审核，不阻塞无模型的构建、审核和发布流程。
 
