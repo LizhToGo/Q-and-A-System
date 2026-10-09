@@ -17,6 +17,11 @@ class AssistUnavailable(RuntimeError):
     pass
 
 
+class EmptyModelOutput(AssistUnavailable):
+    """The upstream returned a valid response envelope without generated text."""
+
+
+
 _ALLOWED_TYPES = {"text", "formula", "example", "waveform", "spectrum"}
 
 
@@ -225,21 +230,31 @@ def _responses_input_value(inputs: list[dict[str, Any]]) -> str | list[dict[str,
     return "\n\n".join(text_parts)
 
 
-def _request_content(messages: list[dict[str, Any]]) -> str:
+def _request_content(messages: list[dict[str, Any]], *, compatibility_retry: bool = False) -> str:
     _require_llm()
     endpoint = settings.llm_base_url or ""
     responses_api = endpoint.rstrip("/").endswith("/responses")
     if responses_api:
         instructions, inputs = _responses_input(messages)
+        input_value = _responses_input_value(inputs)
         payload = {
             "model": settings.llm_model,
             "max_output_tokens": 1024,
             "reasoning": {"effort": "none"},
             "instructions": instructions,
-            "input": _responses_input_value(inputs),
+            "input": input_value,
             # SDU's /responses gateway currently requires messages and returns choices.
             "messages": messages,
         }
+        if compatibility_retry:
+            # Retry with the smallest Responses-compatible envelope when the
+            # gateway accepted the request but emitted an empty message.
+            payload = {
+                "model": settings.llm_model,
+                "max_output_tokens": 1536,
+                "input": input_value,
+                "messages": messages,
+            }
         endpoint = _responses_endpoint(endpoint)
     else:
         payload = {
@@ -266,7 +281,7 @@ def _request_content(messages: list[dict[str, Any]]) -> str:
             f"模型响应结构缺少可用文本：{exc.__class__.__name__}；shape={_response_shape(body)}"
         ) from exc
     if not isinstance(content, str) or not content.strip():
-        raise AssistUnavailable(f"模型响应文本为空；shape={_response_shape(body)}")
+        raise EmptyModelOutput(f"模型响应文本为空；shape={_response_shape(body)}")
     return content
 
 
@@ -293,7 +308,20 @@ def _repair_messages(raw_content: str) -> list[dict[str, str]]:
 
 
 def _call_llm(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    content = _request_content(messages)
+    responses_api = bool((settings.llm_base_url or "").rstrip("/").endswith("/responses"))
+    try:
+        content = _request_content(messages)
+    except EmptyModelOutput as first_empty:
+        if not responses_api:
+            raise AssistUnavailable(f"模型返回空文本：{first_empty}") from first_empty
+        try:
+            content = _request_content(messages, compatibility_retry=True)
+        except EmptyModelOutput as second_empty:
+            raise AssistUnavailable(
+                "模型连续两次返回空文本；已尝试 Responses 兼容重试"
+            ) from second_empty
+        except AssistUnavailable as retry_error:
+            raise AssistUnavailable(f"模型空输出兼容重试失败：{retry_error}") from retry_error
     try:
         return _json_content(content)
     except (TypeError, ValueError, json.JSONDecodeError) as first_error:

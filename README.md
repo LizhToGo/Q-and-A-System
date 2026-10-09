@@ -88,6 +88,8 @@ python -m backend.build_knowledge `
 
 构建阶段只创建/复用导入任务、按 `ocr_pages` 执行显式 OCR，并输出带教材哈希、页码、`source_anchor`、原文哈希和候选内容的 review manifest；不会自动发布。模型辅助只有在清单填写 `assist_pages` 时才调用，失败会记录到 `errors` 并保留待审核状态。
 
+默认保持人工确认。若某个 job 显式设置 `"auto_approve_low_risk": true`，构建器只会自动批准原生纯文本：`item_type=text`、无 OCR/模型标记、无公式、无图片、原文与规范化文本一致且提取置信度不低于 `0.7`；自动项会写入 `approval_method=auto_low_risk_text`。公式、数值、波形、频谱、OCR 低置信度和模型整理结果不会走这条自动通路，仍进入审核清单。
+
 人工检查 review manifest，将确认的条目标记为 `"approved": true`，再执行：
 
 ```powershell
@@ -105,7 +107,7 @@ python -m backend.build_knowledge `
 - 重复执行审核发布，结果为 `published=0, skipped=563`，证明按文档哈希、页码和 `source_anchor` 幂等；
 - 当前检索接口按材料片段返回结果，因此同一页可能出现多个候选；本次结果中第 58、66 页各出现重复片段，另外还命中了未验证的演示材料，后续应增加按 `source_anchor` 去重和课程数据隔离。
 - 使用这两条真实材料校验“奈奎斯特抽样定理要求什么？”时，结果为 `text=pass`、`formula=unknown`、`numeric=not_applicable`、`cross_modal=not_applicable`，追溯状态为 `traced`；
-- 对真实教材第 59 页执行 Responses 文本辅助时，首次表现为非 JSON 输出；加入安全结构诊断后确认最近一次响应为 `choices[0].message.content` 空字符串（`len=0`），接口因此返回 `503`。当前代码已支持包裹文本提取、单次 JSON 自动修复和文本输入兼容格式，但这些机制无法修复上游空输出；该页保持待审核。
+- 之前一次运行进程环境实际使用了 Chat Completions 地址（进程环境变量优先于本地 `.env`），返回 `choices[0].message.content` 空字符串；明确把运行时 `LLM_BASE_URL` 设为 `/v1/responses` 后，第 59 页真实辅助返回 `200`，生成文本长度为 `359`、`confidence=0.35`，但仍保持 `pending`。代码对空输出只做一次有界兼容重试，对非空非法 JSON 做一次自动修复；低置信度结果目前不会自动批准。
 
 
 ## DeepSeek 配置

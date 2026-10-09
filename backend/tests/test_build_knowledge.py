@@ -39,3 +39,44 @@ def test_review_manifest_requires_explicit_approval_and_is_idempotent(client, tm
             apply_review_manifest(review_path, db, publish=True)
     finally:
         db.close()
+
+
+def test_low_risk_native_text_can_be_auto_approved(client, tmp_path):
+    source = tmp_path / "clean.md"
+    source.write_text(
+        "1.1 采样定理\n\n"
+        "抽样频率必须大于信号最高频率的两倍，才能避免周期延拓后的频谱发生混叠。"
+        "这是一段没有公式、图像或 OCR 标记的原生教材文本，用于验证低风险纯文本可以走自动审核路径。",
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "build.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "jobs": [
+                    {
+                        "path": "clean.md",
+                        "course_id": 1,
+                        "review_pages": [1],
+                        "auto_approve_low_risk": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    db = SessionLocal()
+    try:
+        review = build_review_manifest(manifest_path, db)
+        item = review["jobs"][0]["review_items"][0]
+        assert item["approved"] is True
+        assert item["approval_method"] == "auto_low_risk_text"
+        assert review["jobs"][0]["auto_approved"] == 1
+        review_path = tmp_path / "review.json"
+        review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+        published = apply_review_manifest(review_path, db, publish=True)
+        assert published["jobs"][0]["published"] == 1
+    finally:
+        db.close()

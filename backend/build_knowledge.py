@@ -56,7 +56,29 @@ def _pages(value: Any, *, field: str) -> list[int]:
     return sorted(set(value))
 
 
-def _item_snapshot(item: Any, approved: bool = False) -> dict[str, Any]:
+def _is_low_risk_text(item: Any) -> bool:
+    payload = item.payload if isinstance(item.payload, dict) else {}
+    raw_text = (item.raw_text or "").strip()
+    normalized_text = (item.normalized_text or "").strip()
+    try:
+        confidence = float(item.confidence or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return bool(
+        item.item_type == "text"
+        and len(raw_text) >= 80
+        and normalized_text == raw_text
+        and not payload.get("needs_ocr")
+        and not payload.get("ocr_engine")
+        and not payload.get("llm_provider")
+        and not payload.get("formulas")
+        and not payload.get("images")
+        and confidence >= 0.7
+    )
+
+
+def _item_snapshot(item: Any, approved: bool = False, approval_method: str | None = None) -> dict[str, Any]:
+    approved = approved or item.review_status == "approved"
     return {
         "item_id": item.id,
         "page_number": item.page_number,
@@ -68,7 +90,8 @@ def _item_snapshot(item: Any, approved: bool = False) -> dict[str, Any]:
         "payload": item.payload or {},
         "confidence": item.confidence,
         "review_status": item.review_status,
-        "approved": approved or item.review_status == "approved",
+        "approved": approved,
+        "approval_method": approval_method or ("existing" if approved else "pending"),
     }
 
 
@@ -127,11 +150,19 @@ def build_review_manifest(manifest_path: Path, db: Any, *, strict_assist: bool =
         if not review_pages:
             review_pages = sorted(items_by_page)
         selected = []
+        auto_approved = 0
+        auto_approve_low_risk = bool(spec.get("auto_approve_low_risk", False))
         for page in review_pages:
             item = items_by_page.get(page)
             if item is None:
                 raise ValueError(f"任务 {job.id} 不存在第 {page} 页")
-            selected.append(_item_snapshot(item))
+            if item.review_status == "approved":
+                selected.append(_item_snapshot(item, approval_method="existing"))
+            elif auto_approve_low_risk and _is_low_risk_text(item):
+                selected.append(_item_snapshot(item, approved=True, approval_method="auto_low_risk_text"))
+                auto_approved += 1
+            else:
+                selected.append(_item_snapshot(item))
         result["jobs"].append({
             "job_id": job.id,
             "course_id": course_id,
@@ -139,6 +170,7 @@ def build_review_manifest(manifest_path: Path, db: Any, *, strict_assist: bool =
             "path": spec["path"],
             "file_hash": _sha256_file(path),
             "review_items": selected,
+            "auto_approved": auto_approved,
             "errors": errors,
         })
     return result
