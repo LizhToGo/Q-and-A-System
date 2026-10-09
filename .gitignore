@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+frontend/node_modules/
+frontend/dist/
+data/knowledge.db
+data/uploads/
+# Local installer/download artifacts.
+=1.4.4
+.tools/*
+!.tools/.gitignore
+
+# Textbook PDFs are local inputs and may be copyrighted; import them separately.
+*.pdf
+
+# Keep the generated evaluation report as a shareable project artifact.
