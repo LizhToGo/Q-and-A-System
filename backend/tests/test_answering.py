@@ -55,7 +55,8 @@ def test_responses_api_uses_input_and_output_text(monkeypatch):
     assert result == {"answer": "4 kHz", "evidence_ids": [7], "provider": "deepseek"}
     url, payload = FakeAsyncClient.calls[0]
     assert url == "https://example.test/v1/responses"
-    assert "input" in payload and "messages" not in payload
+    assert "input" in payload and "messages" in payload
+    assert payload["reasoning"] == {"effort": "none"}
 
 
 def test_chat_completions_remains_supported(monkeypatch):

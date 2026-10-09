@@ -80,14 +80,16 @@ python -m backend.import_textbooks ".\信号与系统 (孙国霞) (z-library.sk,
 
 ## DeepSeek 配置
 
-后端使用 OpenAI-compatible Chat Completions 适配器，支持填写完整请求地址，也兼容填写 `/v1` 基地址。当前 SDU 服务的配置示例：
+后端默认使用 OpenAI-compatible Responses API；适配器也保留 Chat Completions 兼容路径。当前 SDU 服务配置：
 
 ```powershell
 $env:LLM_PROVIDER = "deepseek"
-$env:LLM_BASE_URL = "https://xplt.sdu.edu.cn:4000/v1/chat/completions"
+$env:LLM_BASE_URL = "https://xplt.sdu.edu.cn:4000/v1/responses"
 $env:LLM_API_KEY = "你的新令牌"
 $env:LLM_MODEL = "ByteDance-volcengine/DeepSeek-V4.1-Flash"
 ```
+
+SDU 当前的 `/v1/responses` 网关要求请求体同时带有 `messages`，并可能返回 Chat 风格的 `choices`；适配器仍使用 `/v1/responses` 地址，同时发送 `input/instructions` 和兼容字段，并解析 `output_text/output/choices` 三种结果形态。
 
 令牌只写在本地未跟踪的 `.env` 或进程环境变量中，不要提交到 GitHub；已在聊天或日志中暴露的令牌应先撤销，再换新令牌。
 

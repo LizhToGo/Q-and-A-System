@@ -21,14 +21,20 @@ _ALLOWED_TYPES = {"text", "formula", "example", "waveform", "spectrum"}
 
 
 def _json_content(content: str) -> dict[str, Any]:
-    content = content.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.S | re.I)
+    value = content.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", value, re.S | re.I)
     if fenced:
-        content = fenced.group(1)
-    value = json.loads(content)
-    if not isinstance(value, dict):
+        value = fenced.group(1).strip()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        start = value.find("{")
+        if start < 0:
+            raise
+        parsed, _end = json.JSONDecoder().raw_decode(value[start:])
+    if not isinstance(parsed, dict):
         raise ValueError("模型返回不是 JSON 对象")
-    return value
+    return parsed
 
 
 def _render_page(document: SourceDocument, page_number: int) -> str:
@@ -80,15 +86,89 @@ def _chat_endpoint(url: str) -> str:
     return endpoint if endpoint.endswith("/chat/completions") else f"{endpoint}/chat/completions"
 
 
+def _responses_endpoint(url: str) -> str:
+    endpoint = url.rstrip("/")
+    return endpoint if endpoint.endswith("/responses") else f"{endpoint}/responses"
+
+
+def _responses_input(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    instructions = ""
+    inputs: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        if role == "system" and isinstance(content, str):
+            instructions = content
+            continue
+        parts: list[dict[str, Any]] = []
+        if isinstance(content, str):
+            parts.append({"type": "input_text", "text": content})
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    parts.append({"type": "input_text", "text": part["text"]})
+                elif part.get("type") == "image_url":
+                    image_url = part.get("image_url", {}).get("url") if isinstance(part.get("image_url"), dict) else None
+                    if isinstance(image_url, str):
+                        parts.append({"type": "input_image", "image_url": image_url})
+        if parts:
+            inputs.append({"role": role if role in {"user", "assistant"} else "user", "content": parts})
+    return instructions, inputs
+
+
+def _response_content(body: Any) -> str:
+    if not isinstance(body, dict):
+        raise TypeError("模型响应不是 JSON 对象")
+    direct = body.get("output_text")
+    if isinstance(direct, str):
+        return direct
+    for output in body.get("output", []):
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content", []):
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                return content["text"]
+    choices = body.get("choices", [])
+    if choices and isinstance(choices[0], dict):
+        message = choices[0].get("message", {})
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            return content
+    raise ValueError("Responses 响应缺少文本内容")
+
+
 def _call_llm(messages: list[dict[str, Any]]) -> dict[str, Any]:
     _require_llm()
-    payload = {"model": settings.llm_model, "temperature": 0, "messages": messages}
+    endpoint = settings.llm_base_url or ""
+    responses_api = endpoint.rstrip("/").endswith("/responses")
+    if responses_api:
+        instructions, inputs = _responses_input(messages)
+        payload = {
+            "model": settings.llm_model,
+            "max_output_tokens": 1024,
+            "reasoning": {"effort": "none"},
+            "instructions": instructions,
+            "input": inputs,
+            # SDU's /responses gateway currently requires messages and returns choices.
+            "messages": messages,
+        }
+        endpoint = _responses_endpoint(endpoint)
+    else:
+        payload = {
+            "model": settings.llm_model,
+            "max_tokens": 1024,
+            "thinking": {"type": "disabled"},
+            "messages": messages,
+        }
+        endpoint = _chat_endpoint(endpoint)
     try:
         with httpx.Client(timeout=45) as client:
-            response = client.post(_chat_endpoint(settings.llm_base_url or ""), headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
+            response = client.post(endpoint, headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
             response.raise_for_status()
             body = response.json()
-            content = body["choices"][0]["message"]["content"]
+            content = _response_content(body) if responses_api else body["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("模型 content 不是字符串")
         return _json_content(content)

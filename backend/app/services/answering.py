@@ -40,7 +40,6 @@ class LLMAnswerer:
                 for content in output.get("content", []):
                     if isinstance(content, dict) and isinstance(content.get("text"), str):
                         return content["text"]
-            return None
         choices = body.get("choices", [])
         if not choices or not isinstance(choices[0], dict):
             return None
@@ -82,6 +81,7 @@ class LLMAnswerer:
         )
         instructions = "只根据给定教材证据回答；网络补充必须明确标注。输出 JSON：answer、claims、evidence_ids。不能编造证据 ID、页码或 URL。"
         prompt = f"问题：{question}\n教材证据：\n{context or '无'}\n网络补充：\n{web_context or '无'}"
+        messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
         endpoint = settings.llm_base_url.rstrip("/")
         responses_api = self._is_responses_endpoint(endpoint)
         if responses_api:
@@ -91,6 +91,8 @@ class LLMAnswerer:
                 "reasoning": {"effort": "none"},
                 "instructions": instructions,
                 "input": prompt,
+                # SDU's /responses gateway currently requires messages and returns choices.
+                "messages": messages,
             }
         else:
             endpoint = LLMAnswerer._chat_endpoint(endpoint)
@@ -98,7 +100,7 @@ class LLMAnswerer:
                 "model": settings.llm_model,
                 "max_tokens": 1024,
                 "thinking": {"type": "disabled"},
-                "messages": [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}],
+                "messages": messages,
             }
         try:
             async with httpx.AsyncClient(timeout=30) as client:
