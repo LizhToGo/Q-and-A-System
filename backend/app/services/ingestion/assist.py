@@ -75,14 +75,22 @@ def _prompt(item: ExtractedItem, *, context: str, mode: str) -> dict[str, Any]:
     }
 
 
+def _chat_endpoint(url: str) -> str:
+    endpoint = url.rstrip("/")
+    return endpoint if endpoint.endswith("/chat/completions") else f"{endpoint}/chat/completions"
+
+
 def _call_llm(messages: list[dict[str, Any]]) -> dict[str, Any]:
     _require_llm()
     payload = {"model": settings.llm_model, "temperature": 0, "messages": messages}
     try:
         with httpx.Client(timeout=45) as client:
-            response = client.post(f"{settings.llm_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
+            response = client.post(_chat_endpoint(settings.llm_base_url or ""), headers={"Authorization": f"Bearer {settings.llm_api_key}"}, json=payload)
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            body = response.json()
+            content = body["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise TypeError("模型 content 不是字符串")
         return _json_content(content)
     except httpx.HTTPError as exc:
         raise AssistUnavailable(f"模型请求失败：{exc.__class__.__name__}") from exc

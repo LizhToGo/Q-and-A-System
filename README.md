@@ -80,14 +80,16 @@ python -m backend.import_textbooks ".\信号与系统 (孙国霞) (z-library.sk,
 
 ## DeepSeek 配置
 
-后端使用 OpenAI-compatible 适配器，不在代码中假设模型一定支持视觉或工具调用：
+后端使用 OpenAI-compatible Chat Completions 适配器，支持填写完整请求地址，也兼容填写 `/v1` 基地址。当前 SDU 服务的配置示例：
 
 ```powershell
 $env:LLM_PROVIDER = "deepseek"
-$env:LLM_BASE_URL = "你的接口地址"
-$env:LLM_API_KEY = "你的密钥"
-$env:LLM_MODEL = "deepseek-v4.1-flash"
+$env:LLM_BASE_URL = "https://xplt.sdu.edu.cn:4000/v1/chat/completions"
+$env:LLM_API_KEY = "你的新令牌"
+$env:LLM_MODEL = "ByteDance-volcengine/DeepSeek-V4.1-Flash"
 ```
+
+令牌只写在本地未跟踪的 `.env` 或进程环境变量中，不要提交到 GitHub；已在聊天或日志中暴露的令牌应先撤销，再换新令牌。
 
 模型结果必须经过来源页范围、证据 ID、SymPy 公式解析和 Pint 单位检查；失败则降级为 OCR/文本结果加人工审核。没有 API 配置时，系统仍可使用本地知识库、规则校验和本地 RAG 回答。
 
