@@ -6,6 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def isolate_runtime_provider_files(tmp_path, monkeypatch):
+    from backend.app import provider_config
+
+    monkeypatch.setattr(provider_config, "PROVIDER_CONFIG_PATH", tmp_path / "provider-config.json")
+    monkeypatch.setattr(provider_config, "ADMIN_TOKEN_PATH", tmp_path / "admin-token")
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"

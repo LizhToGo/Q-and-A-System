@@ -1,4 +1,4 @@
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api').replace(/\/$/, '')
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api').replace(/\/$/, '')
 
 export interface Course {
   id: number
@@ -29,6 +29,14 @@ export interface Material {
   verified: boolean
 }
 
+export interface EvidenceMedia {
+  id: string
+  kind: 'figure' | 'table' | 'page'
+  label: string
+  page_number: number
+  url: string
+}
+
 export interface EvidenceItem {
   material_id: number
   chunk_id: number | null
@@ -42,14 +50,34 @@ export interface EvidenceItem {
   snippet: string
   score: number
   verified: boolean
+  source_document_id?: number | null
+  content_format?: 'markdown' | 'text'
+  full_content?: string | null
+  page_image_url?: string | null
+  media?: EvidenceMedia[]
 }
 
 export interface SearchRequest {
   query: string
   course_id?: number
   topic_id?: number
+  source_document_id?: number
   material_types?: string[]
   limit?: number
+}
+
+export interface SourceDocument {
+  id: number
+  course_id: number | null
+  filename: string
+  parser: string
+  status: string
+  page_count: number
+  job_id: number | null
+  rag_indexed_pages: number
+  rag_verified_pages: number
+  rag_candidate_pages: number
+  rag_coverage: number
 }
 
 export interface SearchResponse {
@@ -80,15 +108,27 @@ export interface ValidateRequest {
   answer: string
   course_id?: number
   topic_id?: number
+  source_document_id?: number
   material_ids?: number[]
 }
 
+export interface AskRequest {
+  conversation_id?: number
+  question: string
+  course_id?: number | null
+  topic_id?: number | null
+  source_document_id?: number | null
+  use_web?: boolean
+  provider_id?: string
+  model?: string
+}
 export interface Traceability {
   [key: string]: unknown
 }
 
 export interface ValidateResponse {
   answer_id: number
+  conversation_id: number | null
   question: string
   answer: string
   checks: ValidationCheck[]
@@ -97,6 +137,23 @@ export interface ValidateResponse {
   risk_flags: string[]
   traceability: Traceability
   agent_trace: Array<Record<string, unknown>>
+}
+
+export interface ConversationScope {
+  course_id: number | null
+  topic_id: number | null
+  source_document_id: number | null
+}
+
+export interface Conversation extends ConversationScope {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationDetail extends Conversation {
+  turns: ValidateResponse[]
 }
 
 export interface CategoryMetric {
@@ -127,6 +184,53 @@ export interface HealthResponse {
   [key: string]: unknown
 }
 
+export interface ProviderConfig {
+  id: string
+  enabled: boolean
+  provider: string
+  base_url: string
+  model: string
+  models: string[]
+  protocol: 'responses'
+  gateway_messages: boolean
+  api_key_configured: boolean
+  config_source: 'environment' | 'saved'
+}
+
+export interface ProviderAdminResponse {
+  providers: ProviderConfig[]
+  default_provider_id: string
+  env_path?: string
+}
+
+export interface PublicProvider {
+  id: string
+  provider: string
+  model: string
+  models: string[]
+  enabled: boolean
+  api_key_configured: boolean
+}
+
+export interface ProviderDraft {
+  enabled: boolean
+  provider: string
+  base_url: string
+  model: string
+  models: string[]
+  gateway_messages: boolean
+  api_key?: string
+}
+export interface ProviderModelsDraft extends ProviderDraft {
+  provider_id?: string
+}
+
+export interface ProviderModelResponse {
+  models: Array<{ id: string }>
+  current_model: string
+}
+
+
 export interface ExtractedItem {
   id: number
   page_number: number
@@ -152,7 +256,9 @@ export interface IngestionJob {
 
 export interface PublishResult {
   published: number
+  updated?: number
   skipped: number
+  revoked?: number
 }
 
 export class ApiError extends Error {
@@ -204,12 +310,32 @@ function queryString(params: Record<string, string | number | undefined>): strin
   return encoded ? `?${encoded}` : ''
 }
 
+export interface RagIndexStatus {
+  job_id: number
+  source_document_id: number
+  filename: string
+  status: string
+  page_count: number
+  indexed_pages: number
+  verified_pages: number
+  candidate_pages: number
+  missing_pages: number
+  material_count: number
+  chunk_count: number
+  coverage: number
+}
+
 export const api = {
   health: () => request<HealthResponse>('/health'),
   courses: () => request<Course[]>('/courses'),
+  conversations: () => request<Conversation[]>('/conversations'),
+  createConversation: (scope: Partial<ConversationScope> = {}) => request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify(scope) }),
+  conversation: (id: number) => request<ConversationDetail>(`/conversations/${encodeURIComponent(String(id))}`),
+  sourceDocuments: (courseId?: number) => request<SourceDocument[]>(`/source-documents${queryString({ course_id: courseId })}`),
   topics: (courseId?: number) => request<Topic[]>(`/topics${queryString({ course_id: courseId })}`),
   materials: (courseId?: number, topicId?: number, materialType?: string) => request<Material[]>(`/materials${queryString({ course_id: courseId, topic_id: topicId, material_type: materialType, limit: 200 })}`),
-  search: (payload: SearchRequest) => request<SearchResponse>('/search', { method: 'POST', body: JSON.stringify(payload) }),
+  materialEvidence: (id: number) => request<EvidenceItem>(`/materials/${encodeURIComponent(String(id))}/evidence`),
+  ask: (payload: AskRequest) => request<ValidateResponse>('/answers/ask', { method: 'POST', body: JSON.stringify(payload) }),
   validateAnswer: (payload: ValidateRequest) => request<ValidateResponse>('/answers/validate', { method: 'POST', body: JSON.stringify(payload) }),
   answer: (id: number) => request<ValidateResponse>(`/answers/${encodeURIComponent(String(id))}`),
   metrics: () => request<Metrics>('/metrics'),
@@ -220,9 +346,37 @@ export const api = {
       return request<IngestionJob>(`/ingestion/upload${queryString({ course_id: courseId })}`, { method: 'POST', body })
     },
     job: (id: number) => request<IngestionJob>(`/ingestion/jobs/${id}`),
-    review: (id: number, payload: { normalized_text: string; review_status: 'approved' | 'rejected' }) => request<ExtractedItem>(`/ingestion/items/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+    rag: (id: number) => request<RagIndexStatus>(`/ingestion/jobs/${id}/rag`),
+    buildRag: (id: number, courseId?: number) => request<Record<string, number | string>>(`/ingestion/jobs/${id}/build-rag${queryString({ course_id: courseId })}`, { method: 'POST' }),
+    qualityAudit: (id: number) => request<{ audited_pages: number; flagged: number; revoked: number; status: string }>(`/ingestion/jobs/${id}/quality-audit`, { method: 'POST' }),
+    review: (id: number, payload: { normalized_text: string; review_status: 'approved' | 'rejected'; quality_review_cleared?: boolean }) => request<ExtractedItem>(`/ingestion/items/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
     ocr: (id: number) => request<ExtractedItem>(`/ingestion/items/${id}/ocr`, { method: 'POST' }),
     assist: (id: number, mode: 'auto' | 'text' | 'vision' = 'auto') => request<ExtractedItem>(`/ingestion/items/${id}/assist${mode === 'auto' ? '' : `?mode=${mode}`}`, { method: 'POST' }),
     publish: (id: number, courseId: number) => request<PublishResult>(`/ingestion/jobs/${id}/publish${queryString({ course_id: courseId })}`, { method: 'POST' }),
   },
+  providers: {
+    get: (adminToken: string) => request<ProviderAdminResponse>('/admin/providers', { headers: { 'X-Admin-Token': adminToken } }),
+    create: (adminToken: string, payload: ProviderDraft & { copy_from?: string }) => request<ProviderConfig>('/admin/providers', {
+      method: 'POST',
+      headers: { 'X-Admin-Token': adminToken },
+      body: JSON.stringify(payload),
+    }),
+    update: (adminToken: string, id: string, payload: ProviderDraft) => request<ProviderConfig>(`/admin/providers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'X-Admin-Token': adminToken },
+      body: JSON.stringify(payload),
+    }),
+    setDefault: (adminToken: string, providerId: string) => request<{ default_provider_id: string }>('/admin/providers/default', {
+      method: 'PUT',
+      headers: { 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ provider_id: providerId }),
+    }),
+    models: (adminToken: string, payload: ProviderModelsDraft) => request<ProviderModelResponse>('/admin/providers/models', {
+      method: 'POST',
+      headers: { 'X-Admin-Token': adminToken },
+      body: JSON.stringify(payload),
+    }),
+  },
+  publicProviders: () => request<{ providers: PublicProvider[]; default_provider_id: string }>('/providers'),
+  providerModels: (providerId: string) => request<ProviderModelResponse>(`/providers/${encodeURIComponent(providerId)}/models`),
 }

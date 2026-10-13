@@ -1,0 +1,246 @@
+{
+  "url": "http://127.0.0.1:5173/",
+  "actual_component": "EvidenceView with real published API materials",
+  "proof": [
+    {
+      "id": "1722",
+      "math": 23,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 6,
+          "columns": 6
+        }
+      ],
+      "media": 1
+    },
+    {
+      "id": "1138",
+      "math": 11,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 5,
+          "columns": 3
+        }
+      ],
+      "media": 2
+    },
+    {
+      "id": "1147",
+      "math": 51,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 5,
+          "columns": 2
+        }
+      ],
+      "media": 1
+    },
+    {
+      "id": "1755",
+      "math": 5,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 2,
+          "columns": 6
+        },
+        {
+          "rows": 13,
+          "columns": 3
+        }
+      ],
+      "media": 3
+    },
+    {
+      "id": "1749",
+      "math": 12,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 2,
+          "columns": 6
+        },
+        {
+          "rows": 2,
+          "columns": 6
+        }
+      ],
+      "media": 5
+    },
+    {
+      "id": "1946",
+      "math": 18,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 5,
+          "columns": 7
+        }
+      ],
+      "media": 2
+    },
+    {
+      "id": "891",
+      "math": 9,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 5,
+          "columns": 3
+        },
+        {
+          "rows": 5,
+          "columns": 3
+        },
+        {
+          "rows": 3,
+          "columns": 2
+        }
+      ],
+      "media": 4
+    },
+    {
+      "id": "1993",
+      "math": 6,
+      "errors": 0,
+      "tables": [
+        {
+          "rows": 3,
+          "columns": 10
+        },
+        {
+          "rows": 11,
+          "columns": 6
+        }
+      ],
+      "media": 6
+    },
+    {
+      "id": "277",
+      "math": 33,
+      "errors": 0,
+      "tables": [],
+      "media": 0
+    },
+    {
+      "id": "359",
+      "math": 16,
+      "errors": 0,
+      "tables": [],
+      "media": 0
+    }
+  ],
+  "source_media": [
+    {
+      "caption": "图A6.17 · PDF 第497页 ↗",
+      "width": 529,
+      "height": 297
+    },
+    {
+      "caption": "图A6.27 · PDF 第497页 ↗",
+      "width": 685,
+      "height": 235
+    },
+    {
+      "caption": "图A6.29 · PDF 第497页 ↗",
+      "width": 369,
+      "height": 464
+    },
+    {
+      "caption": "表A6.24 · PDF 第497页 ↗",
+      "width": 974,
+      "height": 132
+    },
+    {
+      "caption": "表A6.29 · PDF 第497页 ↗",
+      "width": 315,
+      "height": 390
+    },
+    {
+      "caption": "图A6.32 · PDF 第498页 ↗",
+      "width": 867,
+      "height": 317
+    }
+  ],
+  "distinct_new_conversation_ids": [
+    8,
+    9
+  ],
+  "note": "Actual browser screenshots inspected: doc3p190 units/ranges and separate full tables; doc4p43 truth tables; doc4p497 upright original crop. Temporary inspection overlay is not product code.",
+  "final_glyph_proof": [
+    {
+      "id": "144",
+      "radicals": 1,
+      "math": 49,
+      "errors": 0,
+      "textLabels": []
+    },
+    {
+      "id": "320",
+      "radicals": 1,
+      "math": 30,
+      "errors": 0,
+      "textLabels": [
+        "。（",
+        "）",
+        "。（",
+        "）"
+      ]
+    },
+    {
+      "id": "1567",
+      "radicals": 0,
+      "math": 11,
+      "errors": 0,
+      "textLabels": [
+        "1",
+        "2",
+        "3",
+        " ",
+        " ",
+        " ",
+        " "
+      ]
+    }
+  ],
+  "actual_frontend_model_answer": {
+    "answer_id": 86,
+    "conversation_id": 7,
+    "model": "ByteDance-volcengine/DeepSeek-V4.1-Flash",
+    "rag_supplied": 10,
+    "citations": 1,
+    "rendered_math": 6,
+    "raw_dollars": false,
+    "katex_errors": 0,
+    "observed": "y(1)=3x(2) displayed as real block math; answer cites signals textbook example1-9"
+  },
+  "final_dsp_original_review_proof": {
+    "actual_component": "EvidenceView loaded real live API materials after final publication and API restart",
+    "materials": [
+      {"id": 288, "pdf_page": 213, "rendered_math": 55, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 316, "pdf_page": 241, "rendered_math": 56, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 336, "pdf_page": 261, "rendered_math": 20, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 356, "pdf_page": 281, "rendered_math": 11, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 2},
+      {"id": 376, "pdf_page": 301, "rendered_math": 57, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 385, "pdf_page": 310, "rendered_math": 22, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 530, "pdf_page": 455, "rendered_math": 52, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 532, "pdf_page": 457, "rendered_math": 19, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 538, "pdf_page": 463, "rendered_math": 34, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1},
+      {"id": 557, "pdf_page": 482, "rendered_math": 34, "katex_errors": 0, "raw_dollars": false, "blocked_links": false, "media": 1}
+    ],
+    "inspected_browser_screenshots": [
+      "PDF310 complete minimum/mixed/maximum-phase equations; no accidental blocked Markdown links",
+      "PDF455 FIR frequency-sampling expression and full IDFT block",
+      "PDF482 decimation sums and source equation correction note",
+      "PDF261 real embedded original graph5.3"
+    ],
+    "figure_reference_regression": {
+      "before": "Spaced native OCR figure5.31 matched figure5.3 and attached unrelated PDF281 to PDF261",
+      "after": "Actual API and frontend PDF261 have only figure5.3 from PDF261; PDF281 preserves figure5.31 and figure5.32",
+      "backend_suite": "225 passed"
+    }
+  }
+}

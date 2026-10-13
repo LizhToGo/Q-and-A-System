@@ -1,0 +1,118 @@
+{
+  "mode": "ocr",
+  "engine": {
+    "base_url": "",
+    "config_source": "local",
+    "engine_version": "3.10.0",
+    "gateway_messages": false,
+    "id": "local-ocr",
+    "local_schema_version": 2,
+    "model": "rapidocr",
+    "provider": "local_ocr"
+  },
+  "statistics": {
+    "selected": 1435,
+    "success": 1434,
+    "resumed": 0,
+    "preserved_reviewed": 1,
+    "failed": 0
+  },
+  "books": [
+    {
+      "document_id": 2,
+      "selected_pages": 379,
+      "complete": true,
+      "failures": 0
+    },
+    {
+      "document_id": 3,
+      "selected_pages": 549,
+      "complete": true,
+      "failures": 0
+    },
+    {
+      "document_id": 4,
+      "selected_pages": 507,
+      "complete": true,
+      "failures": 0
+    }
+  ],
+  "model_import_note": "Configured provider had genuine completed outputs but intermittent 401/404; local mode was explicitly selected, not a silent fallback. Credentials unchanged.",
+  "resume_verification": {
+    "selected": 1435,
+    "preserved_reviewed": 1435,
+    "failed": 0,
+    "completed": true,
+    "slices": [
+      {
+        "directory": "doc-2-a",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 190,
+          "resumed": 0,
+          "selected": 190,
+          "success": 0
+        }
+      },
+      {
+        "directory": "doc-2-b",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 189,
+          "resumed": 0,
+          "selected": 189,
+          "success": 0
+        }
+      },
+      {
+        "directory": "doc-3-a",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 275,
+          "resumed": 0,
+          "selected": 275,
+          "success": 0
+        }
+      },
+      {
+        "directory": "doc-3-b",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 274,
+          "resumed": 0,
+          "selected": 274,
+          "success": 0
+        }
+      },
+      {
+        "directory": "doc-4-a",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 254,
+          "resumed": 0,
+          "selected": 254,
+          "success": 0
+        }
+      },
+      {
+        "directory": "doc-4-b",
+        "completed": true,
+        "statistics": {
+          "failed": 0,
+          "preserved_reviewed": 253,
+          "resumed": 0,
+          "selected": 253,
+          "success": 0
+        }
+      }
+    ],
+    "before_material_sha256": "abded40b515627441a1befa921bbd38ebee3154dfd3b4efa9b34d2754d051347",
+    "after_material_sha256": "abded40b515627441a1befa921bbd38ebee3154dfd3b4efa9b34d2754d051347",
+    "approved_materials_unchanged": true
+  }
+}

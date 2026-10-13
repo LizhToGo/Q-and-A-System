@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+_INTERNAL_ERROR_STATUSES = {"missing_unit", "dimension_error", "mismatch"}
+
+
+def public_validation_status(status: str) -> str:
+    """Map validator-specific error labels to the public API contract."""
+    return "fail" if status in _INTERNAL_ERROR_STATUSES else status
+
 @dataclass
 class Evidence:
     material_id: int
@@ -34,7 +41,7 @@ class ValidationResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "category": self.category,
-            "status": self.status,
+            "status": public_validation_status(self.status),
             "message": self.message,
             "claim": self.claim,
             "evidence_ids": self.evidence_ids,

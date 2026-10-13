@@ -23,9 +23,9 @@ class ValidationAgent:
     def _step(self, name: str, status: str, **details) -> None:
         self.trace.append({"step": name, "status": status, **details})
 
-    def run(self, question: str, answer: str, course_id=None, topic_id=None, material_ids=None):
+    def run(self, question: str, answer: str, course_id=None, topic_id=None, material_ids=None, source_document_id=None):
         self._step("classify", "completed", categories=["text", "formula", "numeric", "cross_modal"])
-        evidence = search_evidence(self.db, f"{question} {answer}", course_id, topic_id, material_ids=material_ids, limit=10)
+        evidence = search_evidence(self.db, f"{question} {answer}", course_id, topic_id, material_ids=material_ids, source_document_id=source_document_id, limit=10)
         self._step("retrieve_local", "completed", evidence_ids=[item.material_id for item in evidence], count=len(evidence))
         if not evidence:
             self._step("fallback", "completed", reason="local evidence unavailable")
@@ -36,7 +36,7 @@ class ValidationAgent:
             validate_cross_modal(question, answer, evidence),
         ]
         self._step("deterministic_validation", "completed", statuses={result.category: result.status for result in results})
-        confidence = calculate_confidence(results, len(evidence))
+        confidence = calculate_confidence(results, len(evidence), sum(1 for item in evidence if item.verified))
         traceability = build_traceability(evidence, results)
         self._step("finalize", "completed", confidence=confidence["level"], traceability=traceability["status"])
         return evidence, results, confidence, traceability, self.trace

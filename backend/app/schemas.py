@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,20 @@ class TopicOut(BaseModel):
     description: str
 
 
+
+class SourceDocumentOut(BaseModel):
+    id: int
+    course_id: int | None
+    filename: str
+    parser: str
+    status: str
+    page_count: int
+    job_id: int | None = None
+    rag_indexed_pages: int = 0
+    rag_verified_pages: int = 0
+    rag_candidate_pages: int = 0
+    rag_coverage: float = 0.0
+
 class MaterialOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,8 +59,16 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     course_id: int | None = None
     topic_id: int | None = None
+    source_document_id: int | None = None
     material_types: list[str] | None = None
     limit: int = Field(default=8, ge=1, le=50)
+
+class EvidenceMedia(BaseModel):
+    id: str
+    kind: Literal["figure", "table", "page"]
+    label: str
+    page_number: int
+    url: str
 
 
 class EvidenceItem(BaseModel):
@@ -61,6 +84,11 @@ class EvidenceItem(BaseModel):
     snippet: str
     score: float
     verified: bool
+    source_document_id: int | None = None
+    content_format: Literal["markdown", "text"] = "text"
+    full_content: str | None = None
+    page_image_url: str | None = None
+    media: list[EvidenceMedia] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):
@@ -68,12 +96,18 @@ class SearchResponse(BaseModel):
     results: list[EvidenceItem]
     has_evidence: bool
 
+ValidationStatus = Literal["pass", "fail", "unknown", "invalid", "conflict", "not_applicable"]
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
+    conversation_id: int | None = Field(default=None, gt=0)
     course_id: int | None = None
     topic_id: int | None = None
+    source_document_id: int | None = None
     use_web: bool = False
+    provider_id: str | None = Field(default=None, min_length=1, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ValidateRequest(BaseModel):
@@ -82,8 +116,7 @@ class ValidateRequest(BaseModel):
     course_id: int | None = None
     topic_id: int | None = None
     material_ids: list[int] | None = None
-
-ValidationStatus = Literal["pass", "fail", "unknown", "invalid", "conflict", "not_applicable"]
+    source_document_id: int | None = None
 
 
 class ValidationResultOut(BaseModel):
@@ -103,6 +136,7 @@ class ConfidenceOut(BaseModel):
 
 class ValidateResponse(BaseModel):
     answer_id: int
+    conversation_id: int | None = None
     question: str
     answer: str
     checks: list[ValidationResultOut]
@@ -111,6 +145,25 @@ class ValidateResponse(BaseModel):
     risk_flags: list[str]
     traceability: dict[str, Any]
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ConversationCreate(BaseModel):
+    course_id: int | None = None
+    topic_id: int | None = None
+    source_document_id: int | None = None
+
+
+class ConversationOut(ConversationCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationDetail(ConversationOut):
+    turns: list[ValidateResponse] = Field(default_factory=list)
 
 
 class ExtractedItemOut(BaseModel):
@@ -143,6 +196,7 @@ class ReviewItemRequest(BaseModel):
     payload: dict[str, Any] | None = None
     review_status: Literal["pending", "approved", "rejected"]
     needs_review: bool | None = None
+    quality_review_cleared: bool = False
 
 
 class MetricsOut(BaseModel):

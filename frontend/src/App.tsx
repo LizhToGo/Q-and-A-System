@@ -2,26 +2,20 @@ import { useEffect, useState } from 'react'
 import { api } from './api'
 import { EvaluationPage } from './pages/EvaluationPage'
 import { IngestionPage } from './pages/IngestionPage'
+import { ProviderSettingsPage } from './pages/ProviderSettingsPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
-type Page = 'workbench' | 'evaluation' | 'ingestion'
+type Page = 'evaluation' | 'ingestion' | 'settings'
+type ApiState = 'checking' | 'online' | 'offline'
 
 function pageFromHash(): Page {
-  if (window.location.hash === '#evaluation') return 'evaluation'
   if (window.location.hash === '#ingestion') return 'ingestion'
-  return 'workbench'
+  if (window.location.hash === '#settings') return 'settings'
+  return 'evaluation'
 }
 
-export default function App() {
-  const [page, setPage] = useState<Page>(pageFromHash)
-  const [apiState, setApiState] = useState<'checking' | 'online' | 'offline'>('checking')
-
-  useEffect(() => {
-    const onHashChange = () => setPage(pageFromHash())
-    window.addEventListener('hashchange', onHashChange)
-    return () => window.removeEventListener('hashchange', onHashChange)
-  }, [])
-
+function useApiState() {
+  const [apiState, setApiState] = useState<ApiState>('checking')
   useEffect(() => {
     let active = true
     api.health()
@@ -29,31 +23,44 @@ export default function App() {
       .catch(() => { if (active) setApiState('offline') })
     return () => { active = false }
   }, [])
+  return apiState
+}
+
+export default function App() {
+  const apiState = useApiState()
+  const [page, setPage] = useState<Page>(pageFromHash)
+  const isAdmin = window.location.pathname.startsWith('/admin')
+
+  useEffect(() => {
+    const onHashChange = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
+  if (!isAdmin) return <WorkbenchPage apiState={apiState} />
 
   const navigate = (nextPage: Page) => {
-    window.location.hash = nextPage === 'evaluation' ? 'evaluation' : nextPage === 'ingestion' ? 'ingestion' : 'workbench'
+    window.location.hash = nextPage
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <a className="brand" href="#workbench" aria-label="课程答案评估工作台首页">
+    <div className="admin-app">
+      <header className="topbar admin-topbar">
+        <a className="brand" href="/" aria-label="返回知答问答首页">
           <span className="brand-mark">答</span>
-          <span><strong>课程答案评估</strong><small>COURSE ANSWER REVIEW</small></span>
+          <span><strong>知答管理后台</strong></span>
         </a>
-        <nav className="main-nav" aria-label="主导航">
-          <button className={page === 'workbench' ? 'nav-link active' : 'nav-link'} onClick={() => navigate('workbench')}>工作台</button>
+        <nav className="main-nav" aria-label="管理后台导航">
           <button className={page === 'evaluation' ? 'nav-link active' : 'nav-link'} onClick={() => navigate('evaluation')}>评估指标</button>
           <button className={page === 'ingestion' ? 'nav-link active' : 'nav-link'} onClick={() => navigate('ingestion')}>教材导入</button>
+          <button className={page === 'settings' ? 'nav-link active' : 'nav-link'} onClick={() => navigate('settings')}>模型配置</button>
         </nav>
-        <div className={`api-indicator api-${apiState}`} title={apiState === 'offline' ? '后端不可用，提交时将显示具体错误' : undefined}>
-          <span className="api-dot" />{apiState === 'checking' ? '连接检查中' : apiState === 'online' ? 'API 已连接' : 'API 暂不可用'}
-        </div>
+        <div className={`api-indicator api-${apiState}`}><span className="api-dot" />{apiState === 'checking' ? '连接检查中' : apiState === 'online' ? 'API 已连接' : 'API 暂不可用'}</div>
       </header>
-      <main>
-        {page === 'workbench' ? <WorkbenchPage onOpenEvaluation={() => navigate('evaluation')} /> : page === 'evaluation' ? <EvaluationPage onOpenWorkbench={() => navigate('workbench')} /> : <IngestionPage />}
+      <main className="admin-main">
+        {page === 'evaluation' ? <EvaluationPage onOpenWorkbench={() => { window.location.href = '/' }} /> : page === 'ingestion' ? <IngestionPage /> : <ProviderSettingsPage />}
       </main>
-      <footer className="footer">课程答案评估 · 数据由后端 API 实时提供</footer>
+      <footer className="footer admin-footer"><a href="/">← 返回问答首页</a><span>知答管理后台 · 数据由后端 API 实时提供</span></footer>
     </div>
   )
 }

@@ -3,10 +3,18 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+.env.*
+!.env.example
 frontend/node_modules/
 frontend/dist/
-data/knowledge.db
-data/uploads/
+# Runtime databases, credentials, textbook bodies/images and checkpoints stay local.
+data/*
+# Reviewed metadata-only progress reports are safe to share.
+!data/library-import-run-report.json
+!data/library-review-integration.json
+!data/library-source-math-report.json
+!data/library-ui-smoke.json
+!data/rag-writing-audit.json
 # Local installer/download artifacts.
 =1.4.4
 .tools/*
@@ -15,5 +23,19 @@ data/uploads/
 # Textbook PDFs are local inputs and may be copyrighted; import them separately.
 *.pdf
 
-# Keep the generated evaluation report as a shareable project artifact.
+# Review manifests can contain copyrighted textbook excerpts.
 configs/*.review.json
+
+# Generated build metadata and local credential/certificate files.
+*.tsbuildinfo
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log

@@ -9,9 +9,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 DATABASE_PATH = DATA_DIR / "knowledge.db"
+ENV_PATH = ROOT_DIR / ".env"
 
 def _load_local_env(path: Path) -> None:
-    """Load a small local .env file without overriding process environment variables."""
+    """Load local defaults; only non-empty process variables take precedence."""
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -27,7 +28,7 @@ def _load_local_env(path: Path) -> None:
             os.environ[key] = value
 
 
-_load_local_env(ROOT_DIR / ".env")
+_load_local_env(ENV_PATH)
 @dataclass(frozen=True)
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
@@ -35,6 +36,8 @@ class Settings:
     llm_base_url: str | None = os.getenv("LLM_BASE_URL")
     llm_api_key: str | None = os.getenv("LLM_API_KEY")
     llm_model: str = os.getenv("LLM_MODEL", "deepseek-v4.1-flash")
+    llm_gateway_messages: bool = os.getenv("LLM_GATEWAY_MESSAGES", "false").lower() == "true"
+    llm_config_source: str = os.getenv("LLM_CONFIG_SOURCE", "saved").lower()
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
     web_search_url: str | None = os.getenv("WEB_SEARCH_URL")
     web_search_api_key: str | None = os.getenv("WEB_SEARCH_API_KEY")

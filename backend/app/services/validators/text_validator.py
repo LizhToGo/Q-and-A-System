@@ -16,6 +16,13 @@ NEGATION_PAIRS = [
 ]
 
 
+def _contains_unnegated(text: str, phrase: str) -> bool:
+    for match in re.finditer(re.escape(phrase), text):
+        if match.start() == 0 or text[match.start() - 1] not in "不未无没":
+            return True
+    return False
+
+
 def _sentences(answer: str) -> list[str]:
     return [item.strip() for item in re.split(r"[。！？!?;；\n]", answer) if item.strip()]
 
@@ -39,7 +46,10 @@ def validate_text(question: str, answer: str, evidence: list[Evidence]) -> Valid
     normalized_answer = answer.replace(" ", "")
     normalized_source = combined.replace(" ", "")
     for source_phrase, answer_phrase in NEGATION_PAIRS:
-        if source_phrase in normalized_source and answer_phrase in normalized_answer:
+        source_has_positive = _contains_unnegated(normalized_source, source_phrase)
+        answer_has_negative = answer_phrase in normalized_answer
+        answer_has_positive = _contains_unnegated(normalized_answer, source_phrase)
+        if source_has_positive and answer_has_negative and not answer_has_positive:
             source_id = next(item.material_id for item in evidence if source_phrase in item.text.replace(" ", ""))
             return ValidationResult(
                 "text",
@@ -49,7 +59,7 @@ def validate_text(question: str, answer: str, evidence: list[Evidence]) -> Valid
                 evidence_ids=[source_id],
                 details={"contradiction": {"source": source_phrase, "answer": answer_phrase}},
             )
-    contradiction_markers = ("相反", "不成立", "不具有", "无关", "不能", "不会", "不是", "错误")
+    contradiction_markers = ("相反", "不成立", "不具有", "无关", "错误")
     if any(marker in normalized_answer for marker in contradiction_markers):
         return ValidationResult("text", "fail", "回答包含否定或相反主张，需要与教材证据重新核对", claim=answer, evidence_ids=[e.material_id for e in evidence[:3]], details={"markers": [marker for marker in contradiction_markers if marker in normalized_answer]})
     meaningful = [s for s in _sentences(answer) if len(s) >= 4]

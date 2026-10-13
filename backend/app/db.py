@@ -20,6 +20,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 def create_tables() -> None:
     from . import models  # noqa: F401
 
+    # Additive tables only: existing answer_records and their history are untouched.
     Base.metadata.create_all(bind=engine)
 
 

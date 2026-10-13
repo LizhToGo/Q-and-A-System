@@ -11,14 +11,18 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import create_tables, get_db
-from .models import AnswerRecord, Course, EvidenceLink, ExtractedItem, Formula, IngestionJob, Material, MaterialChunk, SourceDocument, Topic, ValidationResultRecord
-from .schemas import AskRequest, CourseOut, EvidenceItem, ExtractedItemOut, IngestionJobOut, MaterialOut, MetricsOut, ReviewItemRequest, SearchRequest, SearchResponse, TopicOut, ValidateRequest, ValidateResponse, ValidationResultOut
+from .models import AnswerRecord, Conversation, ConversationTurn, Course, EvidenceLink, ExtractedItem, Formula, IngestionJob, Material, MaterialChunk, SourceDocument, Topic, ValidationResultRecord, utcnow
+from .schemas import AskRequest, ConversationCreate, ConversationDetail, ConversationOut, CourseOut, EvidenceItem, ExtractedItemOut, IngestionJobOut, MaterialOut, MetricsOut, ReviewItemRequest, SearchRequest, SearchResponse, SourceDocumentOut, TopicOut, ValidateRequest, ValidateResponse, ValidationResultOut
 from .services.agent import ValidationAgent
 from .services.answering import LLMAnswerer, build_local_answer
 from .services.ingestion.assist import AssistUnavailable, assist_extracted_item
-from .services.ingestion.service import OCRUnavailable, create_ingestion_job, list_job_items, ocr_item, publish_job, save_upload
+from .services.ingestion.service import OCRUnavailable, _ensure_legacy_quality_flags, _invalidate_item_publication, _quality_flags, audit_job_quality, build_rag_index, create_ingestion_job, get_rag_index_status, list_job_items, ocr_item, publish_job, save_upload
 from .services.retrieval import evidence_dict, search_evidence
 from .services.web_search import WebSearchProvider
+from .services.validators.types import public_validation_status
+from .provider_admin import router as provider_admin_router
+from .source_media import router as source_media_router
+from .provider_config import get_provider_config
 
 
 @asynccontextmanager
@@ -28,7 +32,15 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="多模态知识一致性校验与可追溯问答系统", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(provider_admin_router)
+app.include_router(source_media_router)
 
 
 def _course_out(db: Session, course: Course) -> CourseOut:
@@ -42,7 +54,14 @@ def _job_out(db: Session, job: IngestionJob) -> IngestionJobOut:
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))
-    return {"status": "ok", "database": "ok", "llm_provider": settings.llm_provider, "llm_configured": bool(settings.llm_base_url and settings.llm_api_key), "web_search_enabled": settings.web_search_enabled}
+    provider_cfg = get_provider_config()
+    return {
+        "status": "ok", "database": "ok", "llm_provider": provider_cfg.provider,
+        "llm_model": provider_cfg.model, "llm_base_url": provider_cfg.base_url,
+        "llm_enabled": provider_cfg.enabled, "llm_configured": bool(provider_cfg.base_url and provider_cfg.api_key),
+        "config_source": provider_cfg.config_source,
+        "web_search_enabled": settings.web_search_enabled,
+    }
 
 
 @app.get("/api/courses", response_model=list[CourseOut])
@@ -56,6 +75,31 @@ def topics(course_id: int | None = None, db: Session = Depends(get_db)):
     if course_id is not None:
         statement = statement.where(Topic.course_id == course_id)
     return list(db.scalars(statement))
+
+
+@app.get("/api/source-documents", response_model=list[SourceDocumentOut])
+def source_documents(course_id: int | None = None, db: Session = Depends(get_db)):
+    statement = select(SourceDocument).order_by(SourceDocument.id)
+    if course_id is not None:
+        statement = statement.where(SourceDocument.course_id == course_id)
+    result = []
+    for document in db.scalars(statement):
+        job = db.scalar(select(IngestionJob).where(IngestionJob.source_document_id == document.id).order_by(IngestionJob.id.desc()))
+        rag = get_rag_index_status(db, job.id) if job else {}
+        result.append(SourceDocumentOut(
+            id=document.id,
+            course_id=document.course_id,
+            filename=document.filename,
+            parser=document.parser,
+            status=document.status,
+            page_count=document.page_count,
+            job_id=job.id if job else None,
+            rag_indexed_pages=int(rag.get("indexed_pages", 0)),
+            rag_verified_pages=int(rag.get("verified_pages", 0)),
+            rag_candidate_pages=int(rag.get("candidate_pages", 0)),
+            rag_coverage=float(rag.get("coverage", 0.0)),
+        ))
+    return result
 
 
 @app.get("/api/materials", response_model=list[MaterialOut])
@@ -72,35 +116,107 @@ def materials(course_id: int | None = None, topic_id: int | None = None, materia
 
 @app.post("/api/search", response_model=SearchResponse)
 def search(request: SearchRequest, db: Session = Depends(get_db)):
-    results = search_evidence(db, request.query, request.course_id, request.topic_id, request.material_types, limit=request.limit)
+    results = search_evidence(db, request.query, request.course_id, request.topic_id, request.material_types, source_document_id=request.source_document_id, limit=request.limit)
     return SearchResponse(query=request.query, results=[EvidenceItem(**evidence_dict(item)) for item in results], has_evidence=bool(results))
+
+
+def _conversation_scope(db: Session, course_id: int | None, topic_id: int | None, source_document_id: int | None) -> None:
+    if course_id is not None and db.get(Course, course_id) is None:
+        raise HTTPException(status_code=400, detail="课程不存在")
+    for model, scope_id, label in ((Topic, topic_id, "主题"), (SourceDocument, source_document_id, "教材")):
+        if scope_id is None:
+            continue
+        item = db.get(model, scope_id)
+        if item is None:
+            raise HTTPException(status_code=400, detail=f"{label}不存在")
+        if course_id is not None and item.course_id != course_id:
+            raise HTTPException(status_code=400, detail=f"{label}不属于所选课程")
+
+
+@app.post("/api/conversations", response_model=ConversationOut)
+def create_conversation(request: ConversationCreate, db: Session = Depends(get_db)):
+    _conversation_scope(db, request.course_id, request.topic_id, request.source_document_id)
+    conversation = Conversation(**request.model_dump())
+    db.add(conversation)
+    db.commit()
+    return conversation
+
+
+@app.get("/api/conversations", response_model=list[ConversationOut])
+def list_conversations(db: Session = Depends(get_db)):
+    return list(db.scalars(select(Conversation).order_by(Conversation.updated_at.desc(), Conversation.id.desc())))
+
+
+@app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
+    conversation = db.get(Conversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    answer_ids = db.scalars(select(ConversationTurn.answer_id).where(ConversationTurn.conversation_id == conversation_id).order_by(ConversationTurn.id))
+    return ConversationDetail(**ConversationOut.model_validate(conversation).model_dump(), turns=[get_answer(answer_id, db) for answer_id in answer_ids])
 
 
 @app.post("/api/answers/ask", response_model=ValidateResponse)
 async def ask_answer(request: AskRequest, db: Session = Depends(get_db)):
-    evidence = search_evidence(db, request.question, request.course_id, request.topic_id, limit=10)
+    conversation = db.get(Conversation, request.conversation_id) if request.conversation_id is not None else None
+    if request.conversation_id is not None and conversation is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    scope = {
+        field: getattr(request, field) if field in request.model_fields_set or conversation is None else getattr(conversation, field)
+        for field in ("course_id", "topic_id", "source_document_id")
+    }
+    _conversation_scope(db, **scope)
+    request = request.model_copy(update=scope)
+    try:
+        provider_cfg = get_provider_config(provider_id=request.provider_id, model=request.model)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="所选 provider 不存在、已禁用或配置无效") from None
+    if conversation is None:
+        conversation = Conversation(**scope)
+        db.add(conversation)
+        db.flush()
+    previous = list(db.scalars(select(AnswerRecord).join(ConversationTurn, ConversationTurn.answer_id == AnswerRecord.id).where(ConversationTurn.conversation_id == conversation.id).order_by(ConversationTurn.id.desc()).limit(3)))
+    history = [{"question": item.question[:1200], "answer": item.answer[:2500]} for item in reversed(previous)]
+    for field, value in scope.items():
+        setattr(conversation, field, value)
+    if conversation.title == "新建对话":
+        conversation.title = " ".join(request.question.split())[:80]
+    conversation.updated_at = utcnow()
+    db.commit()
+    retrieval_query = f"{history[-1]['question']}\n{request.question}" if history else request.question
+    evidence = search_evidence(db, retrieval_query, request.course_id, request.topic_id, source_document_id=request.source_document_id, limit=10)
     evidence_payload = [evidence_dict(item) for item in evidence]
     web_results = await WebSearchProvider().search(request.question) if request.use_web else []
-    answerer = LLMAnswerer()
-    model_draft = await answerer.complete(request.question, evidence_payload, web_results)
+    answerer = LLMAnswerer(provider_cfg)
+    model_draft = await answerer.complete(request.question, evidence_payload, web_results, history=history) if history else await answerer.complete(request.question, evidence_payload, web_results)
     draft = model_draft or build_local_answer(request.question, evidence_payload)
     answer = str(draft.get("answer", "")).strip() or "当前没有生成可校验的回答。"
     evidence_ids = {item.material_id for item in evidence}
     requested_ids = [item for item in draft.get("evidence_ids", []) if item in evidence_ids]
-    evidence, results, confidence, traceability, agent_trace = ValidationAgent(db).run(request.question, answer, request.course_id, request.topic_id, requested_ids or None)
+    evidence, results, confidence, traceability, agent_trace = ValidationAgent(db).run(request.question, answer, request.course_id, request.topic_id, requested_ids or sorted(evidence_ids) or None, request.source_document_id)
     generation_trace = {
         "step": "answer_generation",
         "status": "model" if model_draft else "fallback",
-        "provider": draft.get("provider", settings.llm_provider),
+        "provider": provider_cfg.provider,
+        "provider_id": provider_cfg.id,
+        "model": provider_cfg.model,
+        "base_url": provider_cfg.base_url,
+        "config_source": provider_cfg.config_source,
         "evidence_ids": sorted(evidence_ids),
+        "rag_evidence_count": len(evidence_payload),
+        "rag_source_anchors": [item["source_anchor"] for item in evidence_payload],
+        "cited_evidence_ids": requested_ids if model_draft else [],
         "web_results": len(web_results),
     }
+    generation_trace.update(answerer.last_diagnostics)
     if answerer.last_error:
         generation_trace["fallback_reason"] = answerer.last_error
     agent_trace = [generation_trace] + agent_trace
-    record = AnswerRecord(question=request.question, answer=answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace})
+    record = AnswerRecord(question=request.question, answer=answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace, "risk_flags": confidence["reasons"], "evidence": [evidence_dict(item) for item in evidence]})
     db.add(record)
     db.flush()
+    db.add(ConversationTurn(conversation_id=conversation.id, answer_id=record.id))
+    conversation.updated_at = utcnow()
     for result in results:
         db.add(ValidationResultRecord(answer_id=record.id, category=result.category, status=result.status, message=result.message, claim=result.claim, evidence_ids=result.evidence_ids, details=result.details))
         for material_id in result.evidence_ids:
@@ -108,7 +224,7 @@ async def ask_answer(request: AskRequest, db: Session = Depends(get_db)):
             if item:
                 db.add(EvidenceLink(answer_id=record.id, claim=result.claim, material_id=item.material_id, chunk_id=item.chunk_id, relation="supports" if result.status == "pass" else "checks"))
     db.commit()
-    return ValidateResponse(answer_id=record.id, question=request.question, answer=answer, checks=[ValidationResultOut(**result.as_dict()) for result in results], evidence=[EvidenceItem(**evidence_dict(item)) for item in evidence], confidence=confidence, risk_flags=confidence["reasons"], traceability=traceability, agent_trace=agent_trace)
+    return ValidateResponse(answer_id=record.id, conversation_id=conversation.id, question=request.question, answer=answer, checks=[ValidationResultOut(**result.as_dict()) for result in results], evidence=[EvidenceItem(**evidence_dict(item)) for item in evidence], confidence=confidence, risk_flags=confidence["reasons"], traceability=traceability, agent_trace=agent_trace)
 
 
 @app.post("/api/answers/validate", response_model=ValidateResponse)
@@ -118,8 +234,9 @@ def validate_answer(request: ValidateRequest, db: Session = Depends(get_db)):
         missing = sorted(set(request.material_ids) - found)
         if missing:
             raise HTTPException(status_code=400, detail={"code": "unknown_material_ids", "ids": missing})
-    evidence, results, confidence, traceability, agent_trace = ValidationAgent(db).run(request.question, request.answer, request.course_id, request.topic_id, request.material_ids)
-    record = AnswerRecord(question=request.question, answer=request.answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace})
+    evidence, results, confidence, traceability, agent_trace = ValidationAgent(db).run(request.question, request.answer, request.course_id, request.topic_id, request.material_ids, request.source_document_id)
+    risk_flags = confidence["reasons"] if confidence["level"] != "high" else []
+    record = AnswerRecord(question=request.question, answer=request.answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace, "risk_flags": risk_flags, "evidence": [evidence_dict(item) for item in evidence]})
     db.add(record)
     db.flush()
     for result in results:
@@ -129,7 +246,6 @@ def validate_answer(request: ValidateRequest, db: Session = Depends(get_db)):
             if item:
                 db.add(EvidenceLink(answer_id=record.id, claim=result.claim, material_id=item.material_id, chunk_id=item.chunk_id, relation="supports" if result.status == "pass" else "checks"))
     db.commit()
-    risk_flags = confidence["reasons"] if confidence["level"] != "high" else []
     return ValidateResponse(answer_id=record.id, question=request.question, answer=request.answer, checks=[ValidationResultOut(**result.as_dict()) for result in results], evidence=[EvidenceItem(**evidence_dict(item)) for item in evidence], confidence=confidence, risk_flags=risk_flags, traceability=traceability, agent_trace=agent_trace)
 
 
@@ -141,12 +257,16 @@ def get_answer(answer_id: int, db: Session = Depends(get_db)):
     results = list(db.scalars(select(ValidationResultRecord).where(ValidationResultRecord.answer_id == answer_id).order_by(ValidationResultRecord.id)))
     material_ids = sorted({material_id for result in results for material_id in (result.evidence_ids or [])})
     evidence = []
-    if material_ids:
+    snapshot = (record.result_json or {}).get("evidence")
+    if material_ids and not isinstance(snapshot, list):
         evidence = search_evidence(db, record.question, record.course_id, record.topic_id, material_ids=material_ids, limit=50)
     confidence = (record.result_json or {}).get("confidence", {"level": "low", "score": 0, "reasons": ["记录缺少可信度数据"]})
     traceability = (record.result_json or {}).get("traceability", {"status": "no_evidence", "message": "无可定位依据", "links": []})
     agent_trace = (record.result_json or {}).get("agent_trace", [])
-    return ValidateResponse(answer_id=record.id, question=record.question, answer=record.answer, checks=[ValidationResultOut(category=item.category, status=item.status, message=item.message, claim=item.claim, evidence_ids=item.evidence_ids or [], details=item.details or {}) for item in results], evidence=[EvidenceItem(**evidence_dict(item)) for item in evidence], confidence=confidence, risk_flags=confidence.get("reasons", []), traceability=traceability, agent_trace=agent_trace)
+    evidence_payload = snapshot if isinstance(snapshot, list) else [evidence_dict(item) for item in evidence]
+    conversation_id = db.scalar(select(ConversationTurn.conversation_id).where(ConversationTurn.answer_id == answer_id))
+    risk_flags = (record.result_json or {}).get("risk_flags", confidence.get("reasons", []))
+    return ValidateResponse(answer_id=record.id, conversation_id=conversation_id, question=record.question, answer=record.answer, checks=[ValidationResultOut(category=item.category, status=public_validation_status(item.status), message=item.message, claim=item.claim, evidence_ids=item.evidence_ids or [], details=item.details or {}) for item in results], evidence=[EvidenceItem(**item) for item in evidence_payload], confidence=confidence, risk_flags=risk_flags, traceability=traceability, agent_trace=agent_trace)
 
 
 @app.get("/api/metrics", response_model=MetricsOut)
@@ -184,18 +304,71 @@ def get_ingestion_job(job_id: int, db: Session = Depends(get_db)):
     return _job_out(db, job)
 
 
+
+@app.post("/api/ingestion/jobs/{job_id}/quality-audit")
+def audit_ingestion_job_quality(job_id: int, db: Session = Depends(get_db)):
+    try:
+        return audit_job_quality(db, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=f"原始教材文件不存在：{exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/ingestion/jobs/{job_id}/build-rag")
+def build_ingestion_job_rag(job_id: int, course_id: int | None = None, db: Session = Depends(get_db)):
+    try:
+        return build_rag_index(db, job_id, course_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/ingestion/jobs/{job_id}/rag")
+def get_ingestion_job_rag(job_id: int, db: Session = Depends(get_db)):
+    try:
+        return get_rag_index_status(db, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 @app.patch("/api/ingestion/items/{item_id}", response_model=ExtractedItemOut)
 def review_item(item_id: int, request: ReviewItemRequest, db: Session = Depends(get_db)):
     item = db.get(ExtractedItem, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="解析项不存在")
+    job = db.get(IngestionJob, item.ingestion_job_id)
+    document = db.get(SourceDocument, job.source_document_id) if job else None
+    payload = _ensure_legacy_quality_flags(item, document) if document else dict(item.payload or {})
+    if request.payload is not None:
+        requested_payload = dict(request.payload)
+        requested_payload["quality_flags"] = _quality_flags(payload)
+        requested_payload["text_quality"] = payload.get("text_quality", "native")
+        payload = {**payload, **requested_payload}
+    quality_flags = _quality_flags(payload)
+    if request.review_status == "approved" and quality_flags and not request.quality_review_cleared:
+        raise HTTPException(status_code=422, detail=f"请核对原始页面并明确确认质量警告：{'、'.join(quality_flags)}")
+    if request.review_status != "approved" and request.quality_review_cleared:
+        raise HTTPException(status_code=422, detail="只有审核通过时才能清除质量警告")
+    previous_text = item.normalized_text
+    previous_payload = dict(item.payload or {})
     if request.normalized_text is not None:
         item.normalized_text = request.normalized_text
-    if request.payload is not None:
-        item.payload = request.payload
+    payload["quality_review_cleared"] = bool(quality_flags and request.quality_review_cleared)
+    item.payload = payload
     item.review_status = request.review_status
-    if request.needs_review is not None:
-        item.needs_review = request.needs_review
+    item.needs_review = (
+        request.needs_review
+        if request.needs_review is not None
+        else request.review_status != "approved" or bool(quality_flags and not request.quality_review_cleared)
+    )
+    if request.review_status == "approved" and not item.needs_review:
+        # Manual approval supersedes the low-confidence import estimate.
+        item.confidence = max(item.confidence, 0.95)
+    if request.review_status != "approved" or previous_text != item.normalized_text or previous_payload != payload:
+        _invalidate_item_publication(db, item, "source_item_review_changed")
     db.commit()
     db.refresh(item)
     return ExtractedItemOut.model_validate(item)

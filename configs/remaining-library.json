@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "document_id": 2,
+      "course_id": 2,
+      "title": "信号与系统 (孙国霞) (z-library.sk, 1lib.sk, z-lib.sk).pdf",
+      "file_hash": "4c06ab454ab31bde31d91b3cb3a8bb5e1c9ce6e1b164ad5bb575c10bac71ba96",
+      "page_count": 379
+    },
+    {
+      "document_id": 3,
+      "course_id": 3,
+      "title": "模拟电子技术基础 (清华大学电子学教研组编；童诗白，华成英原主编；华成英，叶朝辉修订者) (z-library.sk, 1lib.sk, z-lib.sk).pdf",
+      "file_hash": "e961e560f0c024c64a5d8dba098d93504ce2de5b24b558a28fa249328390ee4c",
+      "page_count": 549
+    },
+    {
+      "document_id": 4,
+      "course_id": 4,
+      "title": "数字电子技术基础 (阎石主编) (z-library.sk, 1lib.sk, z-lib.sk).pdf",
+      "file_hash": "efdf852b8d872c228f02d495a28133404adaca58acf6ee061685a8c43890fda4",
+      "page_count": 507
+    }
+  ]
+}

@@ -50,7 +50,7 @@ def validate_numeric(question: str, answer: str, evidence: list[Evidence]) -> Va
     if not expected and not answer_values:
         return ValidationResult("numeric", "not_applicable", "当前问题没有可校验的带单位数值")
     if expected and not answer_values:
-        return ValidationResult("numeric", "missing_unit", "回答没有提供带单位的数值结果", claim=answer, evidence_ids=[e.material_id for e in evidence[:3]])
+        return ValidationResult("numeric", "missing_unit", "回答没有提供带单位的数值结果", claim=answer, evidence_ids=[e.material_id for e in evidence[:3]], details={"reason": "missing_unit"})
     if not expected:
         return ValidationResult("numeric", "unknown", "发现数值但教材证据没有标准数值", claim=str(answer_values))
 
