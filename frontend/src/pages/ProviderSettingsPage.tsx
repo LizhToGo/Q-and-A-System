@@ -1,15 +1,13 @@
 import { useRef, useState } from 'react'
 import { api, type ProviderConfig, type ProviderAdminResponse, type ProviderDraft } from '../api'
 
-type FormState = ProviderDraft
-
-const emptyForm: FormState = { enabled: true, provider: '', base_url: '', model: '', models: [], gateway_messages: false, api_key: '' }
+const emptyForm: ProviderDraft = { enabled: true, provider: '', base_url: '', model: '', models: [], gateway_messages: false, api_key: '' }
 
 function messageFor(reason: unknown, fallback: string) {
   return reason instanceof Error ? reason.message : fallback
 }
 
-function formFromConfig(config: ProviderConfig): FormState {
+function formFromConfig(config: ProviderConfig): ProviderDraft {
   return { enabled: config.enabled, provider: config.provider, base_url: config.base_url, model: config.model, models: [...config.models], gateway_messages: config.gateway_messages, api_key: '' }
 }
 
@@ -17,7 +15,7 @@ export function ProviderSettingsPage() {
   const [adminToken, setAdminToken] = useState('')
   const [registry, setRegistry] = useState<ProviderAdminResponse | null>(null)
   const [selectedId, setSelectedId] = useState('')
-  const [form, setForm] = useState<FormState>(emptyForm)
+  const [form, setForm] = useState<ProviderDraft>(emptyForm)
   const [creating, setCreating] = useState(false)
   const [copyFrom, setCopyFrom] = useState<string | undefined>()
   const [models, setModels] = useState<Array<{ id: string }>>([])
@@ -28,7 +26,7 @@ export function ProviderSettingsPage() {
   const modelRequest = useRef(0)
 
   const selected = registry?.providers.find((provider) => provider.id === selectedId) ?? null
-  const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+  const update = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
     if (key === 'base_url' || key === 'api_key') {
       modelRequest.current += 1
       setModelsBusy(false)

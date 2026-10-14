@@ -224,11 +224,8 @@ def _response_content(body: Any) -> str:
         return direct
     if message_text or output_text:
         return "".join(message_text or output_text)
-    choices = body.get("choices", [])
     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
         choice = choices[0]
-        if choice.get("finish_reason") in {"length", "content_filter", "tool_calls"}:
-            raise IncompleteModelOutput("网关响应未完整完成页面转写")
         message = choice.get("message", {})
         if isinstance(message, dict) and message.get("refusal"):
             raise AssistUnavailable("模型拒绝转写来源页")

@@ -9,15 +9,9 @@ interface WorkbenchPageProps {
   apiState: 'checking' | 'online' | 'offline'
 }
 
-type ChatTurn = {
-  id: number
-  question: string
-  result: ValidateResponse
-}
-
 type Thread = {
   summary: Conversation
-  turns: ChatTurn[]
+  turns: ValidateResponse[]
   draft: string
   error: string
   pending: boolean
@@ -28,7 +22,7 @@ const activeConversationKey = 'knowledge-active-conversation-id'
 const emptyScope: ConversationScope = { course_id: null, topic_id: null, source_document_id: null }
 
 function threadFrom(summary: Conversation, turns?: ValidateResponse[]): Thread {
-  return { summary, turns: (turns ?? []).map((result) => ({ id: result.answer_id, question: result.question, result })), draft: '', error: '', pending: false, loaded: turns !== undefined }
+  return { summary, turns: turns ?? [], draft: '', error: '', pending: false, loaded: turns !== undefined }
 }
 
 function rememberConversation(id: number) {
@@ -46,11 +40,10 @@ function confidenceText(value: number | undefined) {
   return `${Math.round(value <= 1 ? value * 100 : value)}%`
 }
 
-function statusForChecks(checks: ValidationCheck[]) {
-  if (!checks.length) return 'unknown'
-  if (checks.some((check) => ['fail', 'conflict'].includes(check.status))) return 'fail'
-  if (checks.every((check) => check.status === 'not_applicable')) return 'not_applicable'
-  if (checks.some((check) => ['unknown', 'invalid'].includes(check.status))) return 'warning'
+function statusForCheck(check: ValidationCheck) {
+  if (check.status === 'fail' || check.status === 'conflict') return 'fail'
+  if (check.status === 'not_applicable') return 'not_applicable'
+  if (check.status === 'unknown' || check.status === 'invalid') return 'warning'
   return 'pass'
 }
 
@@ -211,7 +204,7 @@ export function WorkbenchPage({ apiState }: WorkbenchPageProps) {
         ...thread,
         summary: detail,
         loaded: true,
-        turns: [...new Map([...detail.turns.map((result) => ({ id: result.answer_id, question: result.question, result })), ...thread.turns].map((turn) => [turn.id, turn])).values()],
+        turns: [...new Map([...detail.turns, ...thread.turns].map((turn) => [turn.answer_id, turn])).values()],
       }))
     }).catch((reason: unknown) => {
       updateThread(id, (thread) => ({ ...thread, error: reason instanceof Error ? reason.message : '历史加载失败。' }))
@@ -239,7 +232,7 @@ export function WorkbenchPage({ apiState }: WorkbenchPageProps) {
       })
       updateThread(id, (value) => ({
         ...value,
-        turns: [...value.turns, { id: result.answer_id, question: trimmed, result }],
+        turns: [...value.turns, { ...result, question: trimmed }],
         summary: { ...value.summary, title: value.turns.length ? value.summary.title : trimmed.replace(/\s+/g, ' ').slice(0, 80), updated_at: new Date().toISOString() },
       }))
     } catch (reason: unknown) {
@@ -286,7 +279,7 @@ export function WorkbenchPage({ apiState }: WorkbenchPageProps) {
           <div className="chat-header-actions"><strong>教材问答</strong><a href="/admin#settings">模型配置</a></div>
         </header>
         <div className="chat-scroll" ref={scrollRef}>
-          {loading || sessionLoading || historyLoading ? <div className="chat-loading"><span className="spinner" /> 正在加载对话与知识库…</div> : turns.length === 0 ? <section className="chat-welcome"><div className="welcome-mark">✦</div><h1>今天想研究什么？</h1><p>向课程知识库提问，回答会附带教材依据和一致性检查结果。</p><div className="suggestion-grid">{suggestions.map((item) => <button key={item} type="button" onClick={() => setQuestion(item)} disabled={!current}>{item}<span>↗</span></button>)}</div></section> : turns.map((turn) => <ChatTurnView key={turn.id} turn={turn} />)}
+          {loading || sessionLoading || historyLoading ? <div className="chat-loading"><span className="spinner" /> 正在加载对话与知识库…</div> : turns.length === 0 ? <section className="chat-welcome"><div className="welcome-mark">✦</div><h1>今天想研究什么？</h1><p>向课程知识库提问，回答会附带教材依据和一致性检查结果。</p><div className="suggestion-grid">{suggestions.map((item) => <button key={item} type="button" onClick={() => setQuestion(item)} disabled={!current}>{item}<span>↗</span></button>)}</div></section> : turns.map((turn) => <ChatTurnView key={turn.answer_id} result={turn} />)}
           {submitting && <div className="chat-message assistant-message"><div className="message-avatar assistant-avatar">答</div><div className="chat-bubble assistant-bubble thinking-bubble"><span className="thinking-dots"><i /><i /><i /></span> 正在检索教材并校验回答…</div></div>}
         </div>
         <div className="chat-composer-wrap">
@@ -305,8 +298,7 @@ export function WorkbenchPage({ apiState }: WorkbenchPageProps) {
   )
 }
 
-function ChatTurnView({ turn }: { turn: ChatTurn }) {
-  const { result } = turn
+function ChatTurnView({ result }: { result: ValidateResponse }) {
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const generation = result.agent_trace.find((step) => step.step === 'answer_generation')
   const fallbackReason = typeof generation?.failure_reason === 'string' ? generation.failure_reason : typeof generation?.fallback_reason === 'string' ? generation.fallback_reason : ''
@@ -316,12 +308,12 @@ function ChatTurnView({ turn }: { turn: ChatTurn }) {
   const supplied = typeof generation?.rag_evidence_count === 'number' ? generation.rag_evidence_count : result.evidence.length
   const cited = Array.isArray(generation?.cited_evidence_ids) ? generation.cited_evidence_ids.length : 0
   return <article className="chat-turn">
-    <div className="chat-message user-message"><div className="message-avatar user-avatar">我</div><div className="chat-bubble user-bubble">{turn.question}</div></div>
+    <div className="chat-message user-message"><div className="message-avatar user-avatar">我</div><div className="chat-bubble user-bubble">{result.question}</div></div>
     <div className="chat-message assistant-message"><div className="message-avatar assistant-avatar">答</div><div className="assistant-content">
       <RichText className="assistant-answer" text={result.answer} />
       <div className="answer-meta"><span className={modelUsed ? 'answer-origin model' : 'answer-origin fallback'}>{modelUsed ? `模型回答${providerName || modelName ? ` · ${providerName}${providerName && modelName ? ' / ' : ''}${modelName}` : ''}` : '本地资料回退'}</span><span>·</span><span>{result.traceability.status === 'traced' ? '已追溯' : '依据不足'}</span><span>RAG 供给 {supplied} · 引用 {cited}</span><span className={`confidence-dot confidence-${result.confidence.level}`} />置信度 {confidenceText(result.confidence.score)}</div>
       {!modelUsed && <div className="answer-fallback-note">模型服务未返回可用回答，已停止展示原始 OCR 片段；下方教材依据仍可展开核对。{fallbackReason && <><br />原因：{fallbackReason}</>}</div>}
-      <div className="checks-compact">{result.checks.map((check, index) => <div className="compact-check" key={`${check.category}-${index}`}><StatusBadge status={statusForChecks([check])} /><span>{categoryLabel(check.category)}</span><strong>{statusLabel(check.status)}</strong></div>)}</div>
+      <div className="checks-compact">{result.checks.map((check, index) => <div className="compact-check" key={`${check.category}-${index}`}><StatusBadge status={statusForCheck(check)} /><span>{categoryLabel(check.category)}</span><strong>{statusLabel(check.status)}</strong></div>)}</div>
       {result.risk_flags.length > 0 && <div className="chat-risk"><strong>风险提示</strong>{Array.from(new Set(result.risk_flags.map(riskText))).map((risk) => <span key={risk}>{risk}</span>)}</div>}
       {result.evidence.length > 0 && <details className="chat-evidence" onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}><summary>查看教材依据 · {result.evidence.length} 条</summary>{evidenceOpen && result.evidence.map((evidence) => <EvidenceView key={`${evidence.material_id}-${evidence.chunk_id ?? 'material'}`} evidence={evidence} />)}</details>}
     </div></div>

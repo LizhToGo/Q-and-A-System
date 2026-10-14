@@ -223,15 +223,6 @@ def _public_profile(cfg: ProviderConfig) -> dict[str, Any]:
     }
 
 
-def public_provider_config(cfg: ProviderConfig | None = None, source: str | None = None) -> dict[str, Any]:
-    cfg = cfg if cfg is not None else get_provider_config()
-    result = _public_profile(cfg)
-    if source is not None:
-        result["config_source"] = source
-    result["env_path"] = str(app_config.ENV_PATH)
-    return result
-
-
 def list_admin_providers(defaults: Any = None) -> dict[str, Any]:
     defaults = app_config.settings if defaults is None else defaults
     saved = _saved_configs()

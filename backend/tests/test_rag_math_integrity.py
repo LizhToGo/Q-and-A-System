@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from backend.app.services.ingestion.service import _chunk_text, _formula_sources
-from backend.app.services.math_markup import safe_excerpt
 from backend.app.services.retrieval import evidence_dict
 from backend.app.services.validators.formula_validator import validate_formula
 from backend.app.services.validators.types import Evidence

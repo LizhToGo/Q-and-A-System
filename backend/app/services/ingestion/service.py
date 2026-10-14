@@ -842,10 +842,6 @@ def ocr_item(db: Session, item_id: int) -> ExtractedItem:
     return item
 
 
-# Explicit aliases make the on-demand API discoverable without changing the route layer.
-ocr_extracted_item = ocr_item
-
-
 def ocr_job_pages(db: Session, job_id: int, pages: list[int] | tuple[int, ...]) -> list[ExtractedItem]:
     """OCR only the requested pages; no background/eager whole-book OCR is performed."""
     requested = sorted({int(page) for page in pages})
@@ -858,6 +854,3 @@ def ocr_job_pages(db: Session, job_id: int, pages: list[int] | tuple[int, ...]) 
             raise ValueError(f"任务中不存在第 {page} 页")
         output.append(ocr_item(db, items[page].id))
     return output
-
-
-ocr_selected_pages = ocr_job_pages

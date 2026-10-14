@@ -11,7 +11,7 @@ from backend.app.db import SessionLocal, create_tables
 from backend.app.models import SourceDocument
 from backend.app.services.ingestion.assist import AssistUnavailable, assist_extracted_item
 from backend.app.services.ingestion.library_import import _blank_evidence
-from backend.app.services.ingestion.service import _ensure_legacy_quality_flags, _quality_flags, create_ingestion_job, list_job_items, ocr_item, publish_job
+from backend.app.services.ingestion.service import _ensure_legacy_quality_flags, _quality_flags, create_ingestion_job, list_job_items, ocr_item, publish_job, sha256_path
 
 
 SCHEMA_VERSION = 1
@@ -25,14 +25,6 @@ _FORMULA_HINT = re.compile(r"[A-Za-z][A-Za-z0-9_{}]*\s*[=<>≥≤]")
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _sha256_text(value: str) -> str:
@@ -199,7 +191,7 @@ def build_review_manifest(manifest_path: Path, db: Any, *, strict_assist: bool =
             "course_id": course_id,
             "source_document_id": job.source_document_id,
             "path": spec["path"],
-            "file_hash": _sha256_file(path),
+            "file_hash": sha256_path(path),
             "review_items": selected,
             "auto_approved": auto_approved,
             "errors": errors,
@@ -214,7 +206,7 @@ def apply_review_manifest(review_path: Path, db: Any, *, publish: bool) -> dict[
     summaries = []
     for job_spec in review.get("jobs", []):
         path = _resolve_path(str(job_spec["path"]), review_path.parent)
-        if _sha256_file(path) != job_spec.get("file_hash"):
+        if sha256_path(path) != job_spec.get("file_hash"):
             raise ValueError(f"教材文件哈希已变化：{path}")
         job = create_ingestion_job(db, path, int(job_spec["course_id"]))
         document = db.get(SourceDocument, job.source_document_id)

@@ -78,6 +78,5 @@ def validate_numeric(question: str, answer: str, evidence: list[Evidence]) -> Va
         if not matched and not errors:
             errors.append(f"数值不匹配：期望约 {expected_value['value']} {expected_value['unit']}")
     if errors:
-        status = "dimension_error" if any("维度错误" in error for error in errors) else "mismatch"
         return ValidationResult("numeric", "fail", "；".join(errors), claim=str(answer_values), evidence_ids=[e.material_id for e in evidence[:3]], details={"matches": matches, "expected": expected})
     return ValidationResult("numeric", "pass", "数值经过单位归一化后与教材标准值一致", claim=str(answer_values), evidence_ids=[e.material_id for e in evidence[:3]], details={"matches": matches, "expected": expected})

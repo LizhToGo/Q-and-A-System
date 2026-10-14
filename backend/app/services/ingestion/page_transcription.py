@@ -10,6 +10,7 @@ from typing import Any
 from ...models import SourceDocument
 from ...provider_config import ProviderConfig, get_provider_config
 from ..math_markup import protected_spans
+from ..source_evidence import valid_bbox
 from .assist import AssistUnavailable, IncompleteModelOutput, UnsupportedImages, _call_llm, _require_llm
 from .service import render_page_bytes
 
@@ -147,7 +148,7 @@ def _page_objects(value: Any, *, field: str, page_number: int, mode: str,
             if "markdown" in entry:
                 obj["markdown"] = _slash_math(_text(entry["markdown"], "tables.markdown"))
             if "columns" in entry:
-                obj["columns"] = [_slash_math(_text(cell, "tables.columns")) for cell in _strings(entry["columns"], "tables.columns")]
+                obj["columns"] = [_slash_math(cell) for cell in _strings(entry["columns"], "tables.columns")]
             if "rows" in entry:
                 if not isinstance(entry["rows"], list) or any(not isinstance(row, list) for row in entry["rows"]):
                     raise AssistUnavailable("模型表格 rows 必须是完整单元格列表")
@@ -156,10 +157,7 @@ def _page_objects(value: Any, *, field: str, page_number: int, mode: str,
                 raise IncompleteModelOutput("模型只返回表题，没有完整表格正文")
         if "bbox" in entry:
             bounds = entry["bbox"]
-            if not isinstance(bounds, list) or len(bounds) != 4 or any(
-                isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or not 0 <= number <= 1
-                for number in bounds
-            ) or not (bounds[0] < bounds[2] and bounds[1] < bounds[3]):
+            if not valid_bbox(bounds):
                 raise AssistUnavailable(f"模型 {field} bbox 不是合法的当前页归一化显示坐标")
             if mode == "vision":
                 obj["bbox"] = bounds

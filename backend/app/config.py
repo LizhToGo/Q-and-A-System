@@ -41,7 +41,6 @@ class Settings:
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
     web_search_url: str | None = os.getenv("WEB_SEARCH_URL")
     web_search_api_key: str | None = os.getenv("WEB_SEARCH_API_KEY")
-    max_agent_steps: int = int(os.getenv("MAX_AGENT_STEPS", "6"))
 
 
 settings = Settings()

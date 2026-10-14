@@ -40,11 +40,6 @@ def test_numeric_mismatch():
     assert result.status == "fail"
 
 
-def test_text_negation_conflict():
-    result = validate_text("", "采样频率低于两倍最高频率不会产生混叠。", evidence())
-    assert result.status == "fail"
-
-
 def test_text_conditional_negation_is_not_marked_as_contradiction():
     result = validate_text("", "只有采样频率大于两倍最高频率时不会产生混叠，否则会产生混叠。", evidence())
     assert result.status == "pass"

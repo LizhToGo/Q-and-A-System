@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import create_tables, get_db
-from .models import AnswerRecord, Conversation, ConversationTurn, Course, EvidenceLink, ExtractedItem, Formula, IngestionJob, Material, MaterialChunk, SourceDocument, Topic, ValidationResultRecord, utcnow
+from .models import AnswerRecord, Conversation, ConversationTurn, Course, EvidenceLink, ExtractedItem, IngestionJob, Material, SourceDocument, Topic, ValidationResultRecord, utcnow
 from .schemas import AskRequest, ConversationCreate, ConversationDetail, ConversationOut, CourseOut, EvidenceItem, ExtractedItemOut, IngestionJobOut, MaterialOut, MetricsOut, ReviewItemRequest, SearchRequest, SearchResponse, SourceDocumentOut, TopicOut, ValidateRequest, ValidateResponse, ValidationResultOut
 from .services.agent import ValidationAgent
 from .services.answering import LLMAnswerer, build_local_answer

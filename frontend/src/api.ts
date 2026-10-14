@@ -15,20 +15,6 @@ export interface Topic {
   description: string
 }
 
-export interface Material {
-  id: number
-  course_id: number
-  topic_id: number | null
-  material_type: string
-  title: string
-  content: string
-  page_number: number | null
-  section: string
-  source_anchor: string
-  tags: unknown[]
-  verified: boolean
-}
-
 export interface EvidenceMedia {
   id: string
   kind: 'figure' | 'table' | 'page'
@@ -57,15 +43,6 @@ export interface EvidenceItem {
   media?: EvidenceMedia[]
 }
 
-export interface SearchRequest {
-  query: string
-  course_id?: number
-  topic_id?: number
-  source_document_id?: number
-  material_types?: string[]
-  limit?: number
-}
-
 export interface SourceDocument {
   id: number
   course_id: number | null
@@ -78,12 +55,6 @@ export interface SourceDocument {
   rag_verified_pages: number
   rag_candidate_pages: number
   rag_coverage: number
-}
-
-export interface SearchResponse {
-  query: string
-  results: EvidenceItem[]
-  has_evidence: boolean
 }
 
 export type ValidationStatus = 'pass' | 'fail' | 'unknown' | 'invalid' | 'conflict' | 'not_applicable'
@@ -101,15 +72,6 @@ export interface Confidence {
   level: 'high' | 'medium' | 'low'
   score: number
   reasons: string[]
-}
-
-export interface ValidateRequest {
-  question: string
-  answer: string
-  course_id?: number
-  topic_id?: number
-  source_document_id?: number
-  material_ids?: number[]
 }
 
 export interface AskRequest {
@@ -333,11 +295,8 @@ export const api = {
   conversation: (id: number) => request<ConversationDetail>(`/conversations/${encodeURIComponent(String(id))}`),
   sourceDocuments: (courseId?: number) => request<SourceDocument[]>(`/source-documents${queryString({ course_id: courseId })}`),
   topics: (courseId?: number) => request<Topic[]>(`/topics${queryString({ course_id: courseId })}`),
-  materials: (courseId?: number, topicId?: number, materialType?: string) => request<Material[]>(`/materials${queryString({ course_id: courseId, topic_id: topicId, material_type: materialType, limit: 200 })}`),
   materialEvidence: (id: number) => request<EvidenceItem>(`/materials/${encodeURIComponent(String(id))}/evidence`),
   ask: (payload: AskRequest) => request<ValidateResponse>('/answers/ask', { method: 'POST', body: JSON.stringify(payload) }),
-  validateAnswer: (payload: ValidateRequest) => request<ValidateResponse>('/answers/validate', { method: 'POST', body: JSON.stringify(payload) }),
-  answer: (id: number) => request<ValidateResponse>(`/answers/${encodeURIComponent(String(id))}`),
   metrics: () => request<Metrics>('/metrics'),
   ingestion: {
     upload: (file: File, courseId: number) => {

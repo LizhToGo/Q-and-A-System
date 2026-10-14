@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from .confidence import calculate_confidence
 from .retrieval import search_evidence
 from .traceability import build_traceability

@@ -51,7 +51,7 @@ def snapshot_rag(db: Session) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             continue
         sidecars.append({'page': material.page_number, 'document_id': material.source_document_id, 'path': str(path.relative_to(ROOT)), 'review': review})
         document = documents.get(material.source_document_id)
-        if review.get('source_file_sha256') != (document.file_hash if document else None) or not item or review.get('source_text_sha256') != hashlib.sha256(item.raw_text.encode('utf-8')).hexdigest():
+        if review.get('source_file_sha256') != (document.file_hash if document else None) or not item or review.get('source_text_sha256') != raw_hashes[f"{material.source_document_id}:{material.page_number}"]:
             findings.append({'kind': 'source_hash_mismatch', 'material_id': material.id, 'page': material.page_number})
         if review.get('normalized_text', '').strip() != material.content.strip():
             findings.append({'kind': 'review_material_out_of_sync', 'material_id': material.id, 'page': material.page_number})

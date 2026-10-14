@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from ...db import SessionLocal
 from ...models import EvidenceLink, ExtractedItem, Formula, IngestionJob, Material, MaterialChunk, SourceDocument
 from ...provider_config import ProviderConfig, get_provider_config
+from ..source_evidence import valid_bbox
 from .page_transcription import PDF_RENDER_LOCK
 from .assist import AssistUnavailable, UnsupportedImages
 from .service import _chunk_text, _pdf_quality, ocr_page, sha256_path
@@ -106,9 +107,7 @@ def validate_result(value: Any, page: int, *, local: bool = False) -> dict[str, 
             row = dict(row)
             row["page_number"] = page
             box = row.get("bbox")
-            if box is not None and not (isinstance(box, list) and len(box) == 4
-                    and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and 0 <= x <= 1 for x in box)
-                    and box[0] < box[2] and box[1] < box[3]):
+            if box is not None and not valid_bbox(box):
                 row.pop("bbox", None)
             safe_rows.append(row)
         clean[field] = safe_rows

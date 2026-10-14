@@ -16,7 +16,6 @@ data/*
 !data/library-ui-smoke.json
 !data/rag-writing-audit.json
 # Local installer/download artifacts.
-=1.4.4
 .tools/*
 !.tools/.gitignore
 
