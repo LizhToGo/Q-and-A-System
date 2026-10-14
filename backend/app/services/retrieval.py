@@ -1,35 +1,82 @@
 from __future__ import annotations
 
-import re
-
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
-from ..models import Course, Formula, Material, MaterialChunk, Topic
-from .validators.types import Evidence
+from ..models import Course, Formula, Material, MaterialChunk, RetrievalRevision, Topic
 from .math_markup import safe_excerpt
+from .rag_worker import RetrievalError, worker_for
+from .validators.types import Evidence
 
 
-TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,}")
+def _snapshot(connection: Connection, revision: str) -> dict:
+    # Only ranking fields cross the process boundary. Page/review payloads and
+    # formula metadata remain in Python and are hydrated for selected rows only.
+    materials = {}
+    for row in connection.execute(select(
+        Material.id, Material.course_id, Material.topic_id, Material.source_document_id,
+        Material.material_type, Material.title, Material.content, Material.tags,
+        Material.section, Material.source_anchor, Material.verified,
+        func.json_extract(Material.metadata_json, "$.publication_status").label("publication_status"),
+    ).where(Material.id.in_(select(MaterialChunk.material_id))).order_by(Material.id)):
+        materials[row.id] = {
+            "id": row.id, "course_id": row.course_id, "topic_id": row.topic_id,
+            "source_document_id": row.source_document_id, "material_type": row.material_type,
+            "title": row.title, "content": row.content, "tags": row.tags or [],
+            "section": row.section, "source_anchor": row.source_anchor,
+            "verified": row.verified, "revoked": row.publication_status == "revoked", "chunks": [],
+        }
+    for row in connection.execute(select(
+        MaterialChunk.id, MaterialChunk.material_id, MaterialChunk.chunk_index, MaterialChunk.text,
+    ).order_by(MaterialChunk.id)):
+        material = materials.get(row.material_id)
+        if material is not None:
+            material["chunks"].append({"id": row.id, "chunk_index": row.chunk_index, "text": row.text})
+    return {"revision": revision, "materials": list(materials.values())}
 
 
-def normalize_query(value: str) -> str:
-    return re.sub(r"\s+", " ", value.strip().lower())
-
-
-def query_terms(value: str) -> list[str]:
-    normalized = normalize_query(value)
-    terms: list[str] = []
-    for token in TOKEN_RE.findall(normalized):
-        if token.isascii():
-            if len(token) > 1:
-                terms.append(token)
-            continue
-        terms.append(token)
-        if all("\u4e00" <= char <= "\u9fff" for char in token):
-            for width in (2, 3):
-                terms.extend(token[index:index + width] for index in range(max(0, len(token) - width + 1)))
-    return list(dict.fromkeys(term for term in terms if len(term) > 1))
+def _hydrate(connection: Connection, matches: list[dict]) -> list[Evidence]:
+    if not matches:
+        return []
+    material_ids = [match["material_id"] for match in matches]
+    chunk_ids = [match["chunk_id"] for match in matches]
+    details = {
+        row.id: row for row in connection.execute(select(
+            Material.id, Material.topic_id, Material.title, Material.material_type,
+            Material.page_number, Material.section, Material.source_anchor,
+            Material.verified, Material.metadata_json,
+            Course.name.label("course_name"), Topic.name.label("topic_name"),
+        ).outerjoin(Course, Course.id == Material.course_id)
+         .outerjoin(Topic, Topic.id == Material.topic_id)
+         .where(Material.id.in_(material_ids)))
+    }
+    chunks = {row.id: row for row in connection.execute(select(
+        MaterialChunk.id, MaterialChunk.material_id, MaterialChunk.text,
+    ).where(MaterialChunk.id.in_(chunk_ids)))}
+    formulae = {material_id: [] for material_id in material_ids}
+    for material_id, raw_formula in connection.execute(
+        select(Formula.material_id, Formula.raw_formula)
+        .where(Formula.material_id.in_(material_ids)).order_by(Formula.id)
+    ):
+        formulae[material_id].append(raw_formula)
+    results = []
+    for match in matches:
+        material = details.get(match["material_id"])
+        chunk = chunks.get(match["chunk_id"])
+        if material is None or chunk is None or chunk.material_id != material.id:
+            raise RetrievalError("C# retrieval evidence does not belong to the SQLite snapshot")
+        results.append(Evidence(
+            material_id=material.id, chunk_id=chunk.id,
+            course=material.course_name if material.course_name is not None else "未知课程",
+            topic=material.topic_name if material.topic_id else None,
+            title=material.title, material_type=material.material_type,
+            page_number=material.page_number, section=material.section,
+            source_anchor=material.source_anchor, text=chunk.text,
+            score=round(match["score"], 4), verified=material.verified,
+            metadata=material.metadata_json or {}, formulae=formulae[material.id],
+        ))
+    return results
 
 
 def search_evidence(
@@ -42,132 +89,44 @@ def search_evidence(
     source_document_id: int | None = None,
     limit: int = 8,
 ) -> list[Evidence]:
-    terms = query_terms(query)
-    if not terms:
-        return []
-
-    # Rank with scalar columns only: review metadata can contain entire page
-    # payloads and must not be decoded for every candidate (or every chunk).
-    statement = select(
-        Material.id,
-        Material.topic_id,
-        Material.title,
-        Material.content,
-        Material.tags,
-        Material.section,
-        Material.verified,
-        Material.source_anchor,
-    ).where(Material.id.in_(select(MaterialChunk.material_id)))
-    if course_id is not None:
-        statement = statement.where(Material.course_id == course_id)
-    if topic_id is not None:
-        statement = statement.where(Material.topic_id == topic_id)
-    if material_types:
-        statement = statement.where(Material.material_type.in_(material_types))
-    if material_ids:
-        statement = statement.where(Material.id.in_(material_ids))
-    if source_document_id is not None:
-        statement = statement.where(Material.source_document_id == source_document_id)
-
-    materials = {material.id: material for material in db.execute(statement)}
-    if not materials:
-        return []
-
-    # Query terms contain no spaces, so no match can cross a joined field
-    # boundary. Count material-level fields once, then apply the original
-    # per-term cap to their combined counts with each chunk.
-    material_scores: dict[int, tuple[float, list[tuple[str, int]]]] = {}
-    for material in materials.values():
-        shared_text = " ".join(
-            [material.title, material.content, " ".join(material.tags or []), material.section]
-        ).lower()
-        counts = [(term, min(3, shared_text.count(term))) for term in terms]
-        material_scores[material.id] = (
-            float(2 * sum(count for _, count in counts)),
-            [(term, count) for term, count in counts if count < 3],
-        )
-
-    chunks = select(
-        MaterialChunk.id, MaterialChunk.material_id, MaterialChunk.chunk_index, MaterialChunk.text
-    ).where(MaterialChunk.material_id.in_(statement.with_only_columns(Material.id)))
-    ranked = []
-    for chunk in db.execute(chunks):
-        material = materials.get(chunk.material_id)
-        if material is None:
-            continue
-        base_score, remaining = material_scores[material.id]
-        text = chunk.text.lower()
-        score = base_score + 2 * sum(min(3 - count, text.count(term)) for term, count in remaining)
-        if score > 0:
-            ranked.append((score, chunk, material))
-    ranked.sort(key=lambda item: (-item[0], int(not item[2].verified), item[2].id, item[1].chunk_index))
-    best_by_material = {}
-    for score, chunk, material in ranked:
-        best_by_material.setdefault(material.id, (score, chunk, material))
-    candidates = list(best_by_material.values())
-    best_by_source = {}
-    # Hydrate only leading candidates. Revoked sources are skipped before
-    # deduplication, and further batches fill any resulting gaps in coverage.
-    batch_size = max(1, limit) if limit >= 0 else max(1, len(candidates))
-    for offset in range(0, len(candidates), batch_size):
-        batch = candidates[offset:offset + batch_size]
-        details = {
-            row.id: row
-            for row in db.execute(
-                select(
-                    Material.id,
-                    Material.material_type,
-                    Material.page_number,
-                    Material.metadata_json,
-                    Course.name.label("course_name"),
-                    Topic.name.label("topic_name"),
-                )
-                .outerjoin(Course, Course.id == Material.course_id)
-                .outerjoin(Topic, Topic.id == Material.topic_id)
-                .where(Material.id.in_([material.id for _, _, material in batch]))
-            )
-        }
-        for score, chunk, material in batch:
-            detail = details[material.id]
-            if (detail.metadata_json or {}).get("publication_status") == "revoked":
-                continue
-            source_key = material.source_anchor or f"material:{material.id}"
-            best_by_source.setdefault(source_key, (score, chunk, material, detail))
-        if limit >= 0 and len(best_by_source) >= limit:
-            break
-    selected = list(best_by_source.values())[:limit]
-    if not selected:
-        return []
-
-    selected_ids = [material.id for _, _, material, _ in selected]
-    formulae: dict[int, list[str]] = {material_id: [] for material_id in selected_ids}
-    for material_id, raw_formula in db.execute(
-        select(Formula.material_id, Formula.raw_formula)
-        .where(Formula.material_id.in_(selected_ids))
-        .order_by(Formula.id)
-    ):
-        formulae[material_id].append(raw_formula)
-    results: list[Evidence] = []
-    for score, chunk, material, detail in selected:
-        results.append(
-            Evidence(
-                material_id=material.id,
-                chunk_id=chunk.id,
-                course=detail.course_name if detail.course_name is not None else "未知课程",
-                topic=detail.topic_name if material.topic_id else None,
-                title=material.title,
-                material_type=detail.material_type,
-                page_number=detail.page_number,
-                section=material.section,
-                source_anchor=material.source_anchor,
-                text=chunk.text,
-                score=round(score, 4),
-                verified=material.verified,
-                metadata=detail.metadata_json or {},
-                formulae=formulae[material.id],
-            )
-        )
-    return results
+    # Connection-level savepoints do not trigger Session.begin_nested's flush.
+    # Explicit BEGIN also makes SQLite's legacy transaction mode hold one read
+    # snapshot and prevents RELEASE SAVEPOINT committing the caller's writes.
+    with db.no_autoflush:
+        connection = db.connection()
+        if connection.dialect.name != "sqlite":
+            raise RetrievalError("C# retrieval requires a SQLite snapshot")
+        worker = worker_for(connection.engine)
+        with worker.lock:
+            driver = connection.connection.driver_connection
+            preexisting_transaction = driver.in_transaction
+            if not preexisting_transaction:
+                connection.exec_driver_sql("BEGIN")
+            savepoint = connection.begin_nested()
+            try:
+                state = connection.execute(select(RetrievalRevision.generation, RetrievalRevision.revision)
+                                           .where(RetrievalRevision.id == 1)).one()
+                revision = f"{state.generation}:{state.revision}"
+                snapshot = _snapshot(connection, revision) if preexisting_transaction or worker.revision != revision else None
+                matches = worker.request({
+                    "snapshot": snapshot, "query": query, "course_id": course_id,
+                    "topic_id": topic_id, "material_types": material_types,
+                    "material_ids": material_ids, "source_document_id": source_document_id,
+                    "limit": limit,
+                })
+                results = _hydrate(connection, matches)
+                savepoint.commit()
+                return results
+            except Exception:
+                savepoint.rollback()
+                raise
+            finally:
+                if preexisting_transaction:
+                    # An uncommitted writer may roll back then reuse the same
+                    # counter with different data. Never reuse its worker corpus.
+                    worker.revision = None
+                else:
+                    connection.exec_driver_sql("ROLLBACK")
 
 
 def evidence_dict(evidence: Evidence) -> dict:

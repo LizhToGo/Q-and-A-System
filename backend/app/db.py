@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -10,6 +10,23 @@ from .config import settings
 
 class Base(DeclarativeBase):
     pass
+
+
+@event.listens_for(Base.metadata, "after_create")
+def _install_retrieval_tracking(metadata, connection, **_kwargs) -> None:
+    if connection.dialect.name != "sqlite":
+        return
+    connection.exec_driver_sql(
+        "INSERT OR IGNORE INTO retrieval_revision (id, generation, revision) "
+        "VALUES (1, lower(hex(randomblob(16))), 0)"
+    )
+    for table in ("materials", "material_chunks"):
+        for operation in ("INSERT", "UPDATE", "DELETE"):
+            connection.exec_driver_sql(
+                f"CREATE TRIGGER IF NOT EXISTS retrieval_{table}_{operation.lower()} "
+                f"AFTER {operation} ON {table} BEGIN "
+                "UPDATE retrieval_revision SET revision = revision + 1 WHERE id = 1; END"
+            )
 
 
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}

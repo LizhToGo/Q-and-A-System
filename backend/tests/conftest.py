@@ -4,6 +4,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+
+@pytest.fixture(scope="session", autouse=True)
+def real_rag_engine():
+    from pathlib import Path
+    import subprocess
+
+    from backend.app.config import ROOT_DIR, settings
+    from backend.app.services.rag_worker import close_workers, worker_environment
+
+    artifact = Path(settings.rag_engine_path)
+    if not artifact.is_file():
+        subprocess.run(
+            [settings.rag_dotnet_executable, "publish", str(ROOT_DIR / "rag-engine" / "Rag.Search" / "Rag.Search.csproj"),
+             "-c", "Release", "-o", str(artifact.parent)],
+            cwd=ROOT_DIR, env=worker_environment(), check=True, timeout=180,
+        )
+    yield
+    close_workers()
+
 @pytest.fixture(autouse=True)
 def isolate_runtime_provider_files(tmp_path, monkeypatch):
     from backend.app import provider_config

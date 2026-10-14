@@ -24,3 +24,6 @@
 **/.ruff_cache
 **/.coverage
 **/htmlcov
+rag-engine/**/bin
+rag-engine/**/obj
+rag-engine/publish

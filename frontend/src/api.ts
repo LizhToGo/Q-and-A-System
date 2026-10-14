@@ -293,7 +293,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     let detail = `请求失败（${response.status}）`
-    if (typeof body === 'object' && body !== null && 'detail' in body) detail = String(body.detail)
+    if (typeof body === 'object' && body !== null && 'detail' in body) {
+      const value = body.detail
+      detail = typeof value === 'object' && value !== null && 'message' in value && typeof value.message === 'string'
+        ? value.message : String(value)
+    }
     throw new ApiError(detail, response.status)
   }
   return body as T

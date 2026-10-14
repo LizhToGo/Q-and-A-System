@@ -41,6 +41,9 @@ class Settings:
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
     web_search_url: str | None = os.getenv("WEB_SEARCH_URL")
     web_search_api_key: str | None = os.getenv("WEB_SEARCH_API_KEY")
+    rag_engine_path: str = os.getenv("RAG_ENGINE_PATH", str(ROOT_DIR / "rag-engine" / "publish" / "Rag.Search.dll"))
+    rag_dotnet_executable: str = os.getenv("RAG_DOTNET_EXECUTABLE", "dotnet")
+    rag_worker_timeout: float = float(os.getenv("RAG_WORKER_TIMEOUT", "30"))
 
 
 settings = Settings()

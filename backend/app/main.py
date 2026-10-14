@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import logging
 from pathlib import Path
 import re
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,7 @@ from .services.study_suggestions import SuggestionsUnavailable, generate_study_s
 from .services.ingestion.assist import AssistUnavailable, assist_extracted_item
 from .services.ingestion.service import OCRUnavailable, _ensure_legacy_quality_flags, _invalidate_item_publication, _quality_flags, audit_job_quality, build_rag_index, create_ingestion_job, get_rag_index_status, list_job_items, ocr_item, publish_job, save_upload
 from .services.retrieval import evidence_dict, search_evidence
+from .services.rag_worker import RetrievalError, close_workers
 from .services.web_search import WebSearchProvider
 from .services.validators.types import public_validation_status
 from .provider_admin import router as provider_admin_router
@@ -32,7 +35,10 @@ from .provider_config import get_provider_config
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     create_tables()
-    yield
+    try:
+        yield
+    finally:
+        close_workers()
 
 
 app = FastAPI(title="多模态知识一致性校验与可追溯问答系统", version="0.1.0", lifespan=lifespan)
@@ -46,6 +52,15 @@ app.add_middleware(
 app.include_router(provider_admin_router)
 app.include_router(source_media_router)
 app.include_router(tool_artifacts_router)
+
+
+@app.exception_handler(RetrievalError)
+async def retrieval_failure(_request, _exc: RetrievalError):
+    logging.getLogger(__name__).error("C# retrieval unavailable", exc_info=_exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"code": "retrieval_unavailable", "message": "C# 检索引擎不可用，未返回检索结果。"}},
+    )
 
 
 def _course_out(db: Session, course: Course) -> CourseOut:

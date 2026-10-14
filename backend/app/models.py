@@ -14,6 +14,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class RetrievalRevision(Base):
+    __tablename__ = "retrieval_revision"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generation: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class Course(Base):
     __tablename__ = "courses"
 
