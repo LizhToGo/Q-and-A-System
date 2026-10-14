@@ -11,3 +11,5 @@ rapidocr>=3.10,<4
 onnxruntime>=1.20,<2
 python-docx>=1.1
 Pillow>=10.0
+numpy>=1.26
+matplotlib>=3.8
