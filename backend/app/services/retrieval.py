@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Course, Material, MaterialChunk, Topic
+from ..models import Course, Formula, Material, MaterialChunk, Topic
 from .validators.types import Evidence
 from .math_markup import safe_excerpt
 
@@ -33,16 +32,6 @@ def query_terms(value: str) -> list[str]:
     return list(dict.fromkeys(term for term in terms if len(term) > 1))
 
 
-def _score(text: str, terms: Iterable[str]) -> float:
-    lowered = text.lower()
-    score = 0.0
-    for term in terms:
-        count = lowered.count(term.lower())
-        if count:
-            score += min(3.0, count) * (2.0 if len(term) > 1 else 0.5)
-    return score
-
-
 def search_evidence(
     db: Session,
     query: str,
@@ -57,7 +46,18 @@ def search_evidence(
     if not terms:
         return []
 
-    statement = select(MaterialChunk, Material).join(Material, Material.id == MaterialChunk.material_id)
+    # Rank with scalar columns only: review metadata can contain entire page
+    # payloads and must not be decoded for every candidate (or every chunk).
+    statement = select(
+        Material.id,
+        Material.topic_id,
+        Material.title,
+        Material.content,
+        Material.tags,
+        Material.section,
+        Material.verified,
+        Material.source_anchor,
+    ).where(Material.id.in_(select(MaterialChunk.material_id)))
     if course_id is not None:
         statement = statement.where(Material.course_id == course_id)
     if topic_id is not None:
@@ -69,43 +69,102 @@ def search_evidence(
     if source_document_id is not None:
         statement = statement.where(Material.source_document_id == source_document_id)
 
-    rows = db.execute(statement).all()
-    course_names = {row.id: row.name for row in db.scalars(select(Course))}
-    topic_names = {row.id: row.name for row in db.scalars(select(Topic))}
-    ranked: list[tuple[float, MaterialChunk, Material]] = []
-    for chunk, material in rows:
-        searchable = " ".join(
-            [material.title, material.content, chunk.text, " ".join(material.tags or []), material.section]
+    materials = {material.id: material for material in db.execute(statement)}
+    if not materials:
+        return []
+
+    # Query terms contain no spaces, so no match can cross a joined field
+    # boundary. Count material-level fields once, then apply the original
+    # per-term cap to their combined counts with each chunk.
+    material_scores: dict[int, tuple[float, list[tuple[str, int]]]] = {}
+    for material in materials.values():
+        shared_text = " ".join(
+            [material.title, material.content, " ".join(material.tags or []), material.section]
+        ).lower()
+        counts = [(term, min(3, shared_text.count(term))) for term in terms]
+        material_scores[material.id] = (
+            float(2 * sum(count for _, count in counts)),
+            [(term, count) for term, count in counts if count < 3],
         )
-        score = _score(searchable, terms)
+
+    chunks = select(
+        MaterialChunk.id, MaterialChunk.material_id, MaterialChunk.chunk_index, MaterialChunk.text
+    ).where(MaterialChunk.material_id.in_(statement.with_only_columns(Material.id)))
+    ranked = []
+    for chunk in db.execute(chunks):
+        material = materials.get(chunk.material_id)
+        if material is None:
+            continue
+        base_score, remaining = material_scores[material.id]
+        text = chunk.text.lower()
+        score = base_score + 2 * sum(min(3 - count, text.count(term)) for term, count in remaining)
         if score > 0:
             ranked.append((score, chunk, material))
     ranked.sort(key=lambda item: (-item[0], int(not item[2].verified), item[2].id, item[1].chunk_index))
-    best_by_source: dict[str, tuple[float, MaterialChunk, Material]] = {}
+    best_by_material = {}
     for score, chunk, material in ranked:
-        if (material.metadata_json or {}).get("publication_status") == "revoked":
-            continue
-        source_key = material.source_anchor or f"material:{material.id}"
-        best_by_source.setdefault(source_key, (score, chunk, material))
+        best_by_material.setdefault(material.id, (score, chunk, material))
+    candidates = list(best_by_material.values())
+    best_by_source = {}
+    # Hydrate only leading candidates. Revoked sources are skipped before
+    # deduplication, and further batches fill any resulting gaps in coverage.
+    batch_size = max(1, limit) if limit >= 0 else max(1, len(candidates))
+    for offset in range(0, len(candidates), batch_size):
+        batch = candidates[offset:offset + batch_size]
+        details = {
+            row.id: row
+            for row in db.execute(
+                select(
+                    Material.id,
+                    Material.material_type,
+                    Material.page_number,
+                    Material.metadata_json,
+                    Course.name.label("course_name"),
+                    Topic.name.label("topic_name"),
+                )
+                .outerjoin(Course, Course.id == Material.course_id)
+                .outerjoin(Topic, Topic.id == Material.topic_id)
+                .where(Material.id.in_([material.id for _, _, material in batch]))
+            )
+        }
+        for score, chunk, material in batch:
+            detail = details[material.id]
+            if (detail.metadata_json or {}).get("publication_status") == "revoked":
+                continue
+            source_key = material.source_anchor or f"material:{material.id}"
+            best_by_source.setdefault(source_key, (score, chunk, material, detail))
+        if limit >= 0 and len(best_by_source) >= limit:
+            break
+    selected = list(best_by_source.values())[:limit]
+    if not selected:
+        return []
+
+    selected_ids = [material.id for _, _, material, _ in selected]
+    formulae: dict[int, list[str]] = {material_id: [] for material_id in selected_ids}
+    for material_id, raw_formula in db.execute(
+        select(Formula.material_id, Formula.raw_formula)
+        .where(Formula.material_id.in_(selected_ids))
+        .order_by(Formula.id)
+    ):
+        formulae[material_id].append(raw_formula)
     results: list[Evidence] = []
-    for score, chunk, material in list(best_by_source.values())[:limit]:
-        metadata = material.metadata_json or {}
+    for score, chunk, material, detail in selected:
         results.append(
             Evidence(
                 material_id=material.id,
                 chunk_id=chunk.id,
-                course=course_names.get(material.course_id, "未知课程"),
-                topic=topic_names.get(material.topic_id) if material.topic_id else None,
+                course=detail.course_name if detail.course_name is not None else "未知课程",
+                topic=detail.topic_name if material.topic_id else None,
                 title=material.title,
-                material_type=material.material_type,
-                page_number=material.page_number,
+                material_type=detail.material_type,
+                page_number=detail.page_number,
                 section=material.section,
                 source_anchor=material.source_anchor,
                 text=chunk.text,
                 score=round(score, 4),
                 verified=material.verified,
-                metadata=metadata,
-                formulae=[formula.raw_formula for formula in material.formulas],
+                metadata=detail.metadata_json or {},
+                formulae=formulae[material.id],
             )
         )
     return results

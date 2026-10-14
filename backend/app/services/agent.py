@@ -9,7 +9,7 @@ from .validators.cross_modal_validator import validate_cross_modal
 from .validators.formula_validator import validate_formula
 from .validators.numeric_validator import validate_numeric
 from .validators.text_validator import validate_text
-from .validators.types import ValidationResult
+from .validators.types import Evidence, ValidationResult
 
 
 class ValidationAgent:
@@ -22,9 +22,26 @@ class ValidationAgent:
     def _step(self, name: str, status: str, **details) -> None:
         self.trace.append({"step": name, "status": status, **details})
 
-    def run(self, question: str, answer: str, course_id=None, topic_id=None, material_ids=None, source_document_id=None):
+    def run(
+        self,
+        question: str,
+        answer: str,
+        course_id=None,
+        topic_id=None,
+        material_ids=None,
+        source_document_id=None,
+        *,
+        retrieved_evidence: list[Evidence] | None = None,
+    ):
         self._step("classify", "completed", categories=["text", "formula", "numeric", "cross_modal"])
-        evidence = search_evidence(self.db, f"{question} {answer}", course_id, topic_id, material_ids=material_ids, source_document_id=source_document_id, limit=10)
+        if retrieved_evidence is None:
+            evidence = search_evidence(self.db, f"{question} {answer}", course_id, topic_id, material_ids=material_ids, source_document_id=source_document_id, limit=10)
+        else:
+            allowed_ids = set(material_ids) if material_ids is not None else None
+            evidence = [
+                item for item in retrieved_evidence
+                if allowed_ids is None or item.material_id in allowed_ids
+            ][:10]
         self._step("retrieve_local", "completed", evidence_ids=[item.material_id for item in evidence], count=len(evidence))
         if not evidence:
             self._step("fallback", "completed", reason="local evidence unavailable")
