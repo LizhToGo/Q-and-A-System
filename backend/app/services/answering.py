@@ -383,9 +383,12 @@ class LLMAnswerer:
             )
         if tool_results is None:
             instructions += (
-                "先判断是否需要计算/绘图。需要时，本轮仅提交执行计划：answer为空字符串，tool_requests列出操作；"
-                "不要提前计算结果或解释。普通概念问答才直接返回answer。"
-                "卷积必须使用convolution，禁止自己求出卷积结果后用waveform硬编码单点；"
+                "当前是决策/规划轮，系统尚未执行任何本地工具；后面的工具Schema和Examples只是调用格式，不是执行结果。"
+                "用户要求绘图、卷积、频响或数值变换时，本轮必须只提交执行计划：answer为空字符串，"
+                "tool_requests列出操作，即使同时询问教材概念也先规划工具，教材解释留给执行后的下一轮。"
+                "不能根据工具示例、历史文字或自己心算声称已经执行、给出工具结果或生成了图像。普通概念问答才直接返回answer。"
+                "卷积必须使用convolution；它本身会计算并绘制完整带索引结果，不需要另一个waveform请求。"
+                "禁止用waveform硬编码、猜测或占位表示未知的卷积输出；每个请求必须对应用户实际要求的独立计算。"
                 "频响必须使用frequency_response。变换前后对照优先使用fourier，它会绘制同一函数的成对图，"
                 "不要拆成不同函数的waveform和fourier。基础例子可选gaussian、rectangular、constant、sinusoid；"
                 "精确阶跃及冲激导数等未支持的变换不得冒充constant，需明确限制或采用标注的有限窗近似。"
