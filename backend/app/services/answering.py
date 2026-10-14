@@ -59,6 +59,24 @@ def normalize_conversation_title(value: object) -> str | None:
     return title
 
 
+def _normalize_retrieval_queries(value: object, question: str) -> list[str] | None:
+    if not isinstance(value, list) or len(value) > 3:
+        return None
+    queries: list[str] = []
+    seen = {" ".join(question.casefold().split())}
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        query = item.strip()
+        if not 1 <= len(query) <= 160 or any(ord(char) < 32 for char in query):
+            return None
+        key = " ".join(query.casefold().split())
+        if key not in seen:
+            seen.add(key)
+            queries.append(query)
+    return queries
+
+
 class LLMAnswerer:
     """可选 OpenAI-compatible Responses API 适配器。"""
 
@@ -361,7 +379,7 @@ class LLMAnswerer:
         from .local_tools import tool_instructions
 
         context = "\n\n".join(
-            f"[教材证据 {item.get('material_id')}] {item.get('title')} {item.get('source_anchor')}\n{item.get('snippet')}"
+            f"[教材证据 {item.get('material_id')}] {item.get('course', '')} {item.get('title')} {item.get('source_anchor')}\n{item.get('snippet')}"
             for item in evidence
         )
         web_context = "\n\n".join(
@@ -370,7 +388,7 @@ class LLMAnswerer:
         )
         instructions = (
             "根据给定教材证据回答；网络补充、本地计算和数值近似必须分别明确标注。"
-            "输出 JSON 对象：answer（Markdown字符串）、evidence_ids（整数列表）、tool_requests（可选列表）。"
+            "输出 JSON 对象：answer（Markdown字符串）、evidence_ids（整数列表）、tool_requests（可选列表）、retrieval_queries（可选列表）。"
             "不能编造证据 ID、页码、图像或 URL，evidence_ids 只能来自本次输入的 material_id。"
             "数学只使用 KaTeX 兼容的 $$...$$、\\(...\\) 或 \\[...\\]；JSON 反斜杠正确转义。"
             "历史对话只用于理解问题，不是教材证据；引用只能来自本次检索。"
@@ -379,14 +397,21 @@ class LLMAnswerer:
             instructions += (
                 "这是尚未命名对话的首轮。直接回答或工具执行后的最终解释须在同一JSON中附conversation_title："
                 "根据首次问题与本轮真实回答总结短中文主题名，约6至20字，最多32字符，无Markdown或公式包裹。"
-                "工具规划轮answer为空时不要生成标题。标题不是问题原文的截断。"
+                "工具或检索规划轮不要生成标题。标题不是问题原文的截断。"
             )
         if tool_results is None:
             instructions += (
                 "当前是决策/规划轮，系统尚未执行任何本地工具；后面的工具Schema和Examples只是调用格式，不是执行结果。"
+                "同时判断原问题是否需要补充教材检索术语：学生口语、同义表达、追问省略导致证据不足或不相关时，"
+                "在retrieval_queries中给出1至3条不同的教材术语或短检索表达，每条非空、单行、最多160字符。"
+                "例如频谱重叠可补充混叠、奈奎斯特条件。原问题始终独立检索，不能替换它；"
+                "不得改写公式、正负号、上下标、DFT/DTFT等精确术语或图表/例题/公式编号，不能扩大用户选定的教材范围。"
+                "不要照抄原问题或泛化成无关学科。已有证据直接对应原问题且术语一致时retrieval_queries为空。"
+                "需要扩展检索时本轮answer为空、evidence_ids为空，等待实际补充证据后再回答；"
+                "如果同时需要本地计算，在这一轮一起给出tool_requests，不另起一次规划。"
                 "用户要求绘图、卷积、频响或数值变换时，本轮必须只提交执行计划：answer为空字符串，"
                 "tool_requests列出操作，即使同时询问教材概念也先规划工具，教材解释留给执行后的下一轮。"
-                "不能根据工具示例、历史文字或自己心算声称已经执行、给出工具结果或生成了图像。普通概念问答才直接返回answer。"
+                "不能根据工具示例、历史文字或自己心算声称已经执行、给出工具结果或生成了图像。无检索扩展、无工具需求的概念问答才直接返回answer。"
                 "卷积必须使用convolution；它本身会计算并绘制完整带索引结果，不需要另一个waveform请求。"
                 "禁止用waveform硬编码、猜测或占位表示未知的卷积输出；每个请求必须对应用户实际要求的独立计算。"
                 "频响必须使用frequency_response。变换前后对照优先使用fourier，它会绘制同一函数的成对图，"
@@ -397,20 +422,30 @@ class LLMAnswerer:
             )
         else:
             instructions += (
-                "下面的本地工具已实际执行。只解释其真实结果、参数、条件和限制，tool_requests 必须为空。"
-                "completed才表示成功；error必须说明失败，不能编造结果。数值FFT不是精确连续傅里叶变换，"
-                "冲激谱是广义函数而非普通连续曲线。图像由前端展示，不在answer编造或插入图像链接。"
+                "这是最终回答轮，检索和工具规划已经完成；retrieval_queries和tool_requests必须为空，不再发起检索或计算。"
             )
+            if tool_results:
+                instructions += (
+                    "下面的本地工具已实际执行。只解释其真实结果、参数、条件和限制。"
+                    "completed才表示成功；error必须说明失败，不能编造结果。数值FFT不是精确连续傅里叶变换，"
+                    "冲激谱是广义函数而非普通连续曲线。图像由前端展示，不在answer编造或插入图像链接。"
+                )
+            else:
+                instructions += "本轮未执行本地工具，不能声称已计算或绘图；必要参数缺失时说明需要补充哪些参数。"
         prompt = f"问题：{question}\n教材证据：\n{context or '无'}\n网络补充：\n{web_context or '无'}"
         if history:
             bounded = [{"question": turn["question"][:1200], "answer": turn["answer"][:2500]} for turn in history[-3:]]
             prompt = "历史对话（非教材证据）：\n" + json.dumps(bounded, ensure_ascii=False) + "\n当前" + prompt
-        if tool_results is not None:
+        if tool_results:
             prompt += "\n已执行本地计算（不是教材证据）：\n" + json.dumps(tool_results, ensure_ascii=False)
         parsed = await self.request_json(instructions, prompt)
         if parsed is None:
             return None
         cfg = self.config or get_provider_config(settings)
+        queries = _normalize_retrieval_queries(parsed.get("retrieval_queries", []), question)
+        if queries is None or (tool_results is not None and queries):
+            self._failure("invalid_retrieval_queries", "模型检索扩展不符合单轮约定", cfg)
+            return None
         requests = parsed.get("tool_requests", [])
         if not isinstance(requests, list) or len(requests) > 4 or (tool_results is not None and requests):
             self._failure("invalid_tool_requests", "模型工具请求不符合单轮执行约定", cfg)
@@ -428,11 +463,12 @@ class LLMAnswerer:
             if candidate in valid_ids:
                 normalized_ids.append(int(candidate))
         parsed["evidence_ids"] = list(dict.fromkeys(normalized_ids))
+        parsed["retrieval_queries"] = queries
         has_computation = bool(requests or tool_results)
-        if not isinstance(parsed.get("answer"), str) or (not requests and not parsed["answer"].strip()) or (not parsed["evidence_ids"] and not has_computation):
+        if not isinstance(parsed.get("answer"), str) or (not requests and not queries and not parsed["answer"].strip()) or (not parsed["evidence_ids"] and not has_computation and not queries):
             self._failure("missing_answer_or_valid_evidence", "模型未提供回答或没有可验证的教材证据/本地计算", cfg)
             return None
-        parsed["conversation_title"] = normalize_conversation_title(parsed.get("conversation_title")) if generate_title and not requests else None
+        parsed["conversation_title"] = normalize_conversation_title(parsed.get("conversation_title")) if generate_title and not requests and not queries else None
         return {**parsed, "tool_requests": requests, "provider": cfg.provider}
 
 def build_local_answer(question: str, evidence: list[dict]) -> dict:

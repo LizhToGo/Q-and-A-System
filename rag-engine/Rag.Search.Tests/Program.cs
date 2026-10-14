@@ -15,6 +15,7 @@ internal static class Program
         ExactFiltersAndLimits();
         UnicodeTokenBoundaries();
         SnapshotTransitionsAndProtocolErrors();
+        QueryExpansionFusion();
         DeterministicCorpusCases();
         Console.WriteLine($"PASS: {assertions} consumer assertions");
         return 0;
@@ -155,6 +156,52 @@ internal static class Program
         Equal(Exchange().Length, 0); // EOF exits cleanly and emits no extra protocol lines.
     }
 
+    private static void QueryExpansionFusion()
+    {
+        var materials = new[]
+        {
+            M(1, chunks: [C(11, 0, "alpha alpha alpha")]),
+            M(2, chunks: [C(21, 0, "alpha")]),
+            M(3, chunks: [C(31, 0, "beta beta beta")]),
+            M(4, chunks: [C(41, 0, "gamma gamma")]),
+            M(5, chunks: [C(51, 0, "alpha beta gamma")]),
+            M(6, course: 2, chunks: [C(61, 0, "beta beta beta")]),
+            M(7, revoked: true, chunks: [C(71, 0, "beta beta beta")]),
+        };
+        JsonElement[] replies = Exchange(
+            Q("alpha", materials, course: 1, extras: ["beta", "gamma"]),
+            Q("alpha", course: 1, extras: [" ALPHA ", "beta", "BETA"]),
+            Q("absent", course: 1, extras: ["beta"]),
+            Q("alpha", course: 1, extras: ["beta", "gamma"], limit: 1),
+            Q("alpha", course: 1, extras: ["beta", "gamma"], limit: -1),
+            Q("alpha", extras: ["beta", "gamma"], limit: 0),
+            Q("alpha", course: 1, extras: ["beta", "gamma"], limit: int.MinValue),
+            Q("alpha", course: 1, extras: ["alpha", "ALPHA", " alpha "]),
+            Q("alpha", extras: ["beta", "gamma", "delta", "epsilon"]),
+            "{\"query\":\"alpha\",\"additional_queries\":[null]}",
+            "{\"query\":\"alpha\",\"additional_queries\":\"beta\"}");
+        Matches(replies[0], (1, 11, 6), (3, 31, 6), (4, 41, 4), (2, 21, 2), (5, 51, 2));
+        Matches(replies[1], (1, 11, 6), (3, 31, 6), (2, 21, 2), (5, 51, 2));
+        Matches(replies[2], (3, 31, 6), (5, 51, 2));
+        Matches(replies[3], (1, 11, 6));
+        Matches(replies[4], (1, 11, 6), (3, 31, 6), (4, 41, 4), (2, 21, 2));
+        Matches(replies[5]);
+        Matches(replies[6]);
+        Matches(replies[7], (1, 11, 6), (2, 21, 2), (5, 51, 2));
+        for (int i = 8; i < replies.Length; i++) Error(replies[i], "invalid_request");
+        // Expanded routes cannot override the original exact formula/number hit.
+        Matches(Exchange(Q("DTFT 2.3.1", [
+            M(1, chunks: [C(11, 0, "DTFT 2.3.1")]),
+            M(2, chunks: [C(21, 0, "DFT 2.3.2")]),
+        ], extras: ["DFT"], limit: 2))[0], (1, 11, 4), (2, 21, 2));
+        // Cross-route source duplicates are skipped without losing the next source.
+        Matches(Exchange(Q("alpha", [
+            M(1, anchor: "page", chunks: [C(11, 0, "alpha")]),
+            M(2, anchor: "page", chunks: [C(21, 0, "beta beta")]),
+            M(3, chunks: [C(31, 0, "beta")]),
+        ], extras: ["beta"], limit: 2))[0], (1, 11, 2), (3, 31, 2));
+    }
+
     private static void DeterministicCorpusCases()
     {
         // Independent known-term oracle: vary chunk order, caps, ties, filters and
@@ -203,10 +250,11 @@ internal static class Program
     private static Chunk C(int id, int index, string text) => new(id, index, text);
 
     private static string Q(string query, Material[]? materials = null, string revision = "r1", int? course = null,
-        int? topic = null, int? document = null, string[]? types = null, int[]? ids = null, int limit = 8) =>
+        int? topic = null, int? document = null, string[]? types = null, int[]? ids = null, int limit = 8, string[]? extras = null) =>
         JsonSerializer.Serialize(new
         {
             snapshot = materials is null ? null : new { revision, materials }, query,
+            additional_queries = extras,
             course_id = course, topic_id = topic, source_document_id = document,
             material_types = types, material_ids = ids, limit,
         }, JsonOptions);

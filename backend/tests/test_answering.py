@@ -372,3 +372,36 @@ def test_title_comes_from_final_tool_explanation_not_empty_planning_round(monkey
     assert len(FakeAsyncClient.calls) == 2
     later = asyncio.run(answerer.complete("继续解释", [], tool_results=results))
     assert later["conversation_title"] is None
+
+
+def test_query_expansion_plan_can_recover_missing_evidence_and_normalizes_duplicate_terms(monkeypatch):
+    FakeAsyncClient.response_body = {"output_text": json.dumps({
+        "answer": "", "evidence_ids": [], "retrieval_queries": ["混叠", " 混叠 ", "NYQUIST"],
+        "conversation_title": "尚未回答就猜测的标题",
+    }, ensure_ascii=False)}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    result = asyncio.run(LLMAnswerer().complete("为什么频谱重叠？", [], generate_title=True))
+    assert result["retrieval_queries"] == ["混叠", "NYQUIST"]
+    assert result["answer"] == "" and result["conversation_title"] is None
+
+
+@pytest.mark.parametrize("queries", [
+    "混叠", ["a", "b", "c", "d"], [None], [123], [""], ["  "], ["a\nb"], ["a" * 161],
+])
+def test_malformed_or_unbounded_query_expansion_is_not_used_for_retrieval(monkeypatch, queries):
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "", "evidence_ids": [], "retrieval_queries": queries})}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    answerer = LLMAnswerer()
+    assert asyncio.run(answerer.complete("为什么频谱重叠？", [])) is None
+    assert answerer.last_error == "invalid_retrieval_queries"
+
+
+def test_final_answer_cannot_start_another_query_expansion_cycle(monkeypatch):
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "已有教材回答", "evidence_ids": [7], "retrieval_queries": ["混叠"]})}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    answerer = LLMAnswerer()
+    assert asyncio.run(answerer.complete("为什么频谱重叠？", _evidence(), tool_results=[])) is None
+    assert answerer.last_error == "invalid_retrieval_queries"

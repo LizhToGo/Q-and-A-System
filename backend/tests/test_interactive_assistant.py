@@ -10,10 +10,11 @@ import pytest
 
 from backend.app import main
 from backend.app.db import SessionLocal
-from backend.app.models import Material, SourceDocument
+from backend.app.models import Material, MaterialChunk, SourceDocument
 from backend.app.provider_config import ProviderConfig
 from backend.app.services import local_tools
 from backend.app.services.answering import LLMAnswerer
+from backend.app.services.retrieval import search_evidence
 
 
 @pytest.fixture
@@ -74,7 +75,7 @@ def test_real_local_convolution_and_generated_artifact_survive_answer_replay(cli
 
     async def model(self, _question, _evidence, _web=None, history=None, *, tool_results=None, generate_title=False):
         if tool_results is None:
-            return {"answer": "执行本地离散卷积。", "evidence_ids": [], "tool_requests": [{"tool": "convolution", "arguments": {"x": [1, 2], "h": [1, -1], "x_start": -1, "h_start": 2}}]}
+            return {"answer": "执行本地离散卷积。", "evidence_ids": [], "retrieval_queries": ["线性卷积 离散序列"], "tool_requests": [{"tool": "convolution", "arguments": {"x": [1, 2], "h": [1, -1], "x_start": -1, "h_start": 2}}]}
         return {"answer": "本地离散卷积在索引1、2、3的结果为1、1、-2。", "evidence_ids": [], "tool_requests": [], "conversation_title": "离散序列卷积计算" if generate_title else None}
 
     monkeypatch.setattr(LLMAnswerer, "complete", model)
@@ -129,3 +130,40 @@ def test_deletion_during_final_tool_explanation_discards_answer_and_generated_pn
     assert client.get(f"/api/conversations/{conversation['id']}").status_code == 404
     assert client.get("/api/conversations").json() == []
     assert all(client.get(url).status_code == 404 for url in artifact_urls)
+
+
+def test_colloquial_question_recalls_textbook_terms_without_leaving_selected_book(client, configured_model, monkeypatch):
+    question = "为什么采样之后会出现频谱重叠？"
+    with SessionLocal() as db:
+        book = SourceDocument(course_id=1, filename="aliases.pdf", file_hash="e" * 64, path="aliases.pdf", page_count=1, parser="test", status="published")
+        db.add(book)
+        db.flush()
+        material = Material(course_id=1, source_document_id=book.id, material_type="text", title="奈奎斯特准则", content="信号带宽需低于抽取速率的一半，否则混叠。", source_anchor=f"doc:{book.id}:p1", page_number=1, verified=True)
+        foreign = Material(course_id=1, material_type="text", title="混叠 奈奎斯特条件", content="混叠 奈奎斯特条件。" * 20, source_anchor="other-book", verified=True)
+        revoked = Material(course_id=1, source_document_id=book.id, material_type="text", title="混叠 奈奎斯特条件", content="混叠 奈奎斯特条件。" * 20, source_anchor="revoked", verified=True, metadata_json={"publication_status": "revoked"})
+        db.add_all([material, foreign, revoked])
+        db.flush()
+        for item in (material, foreign, revoked):
+            db.add(MaterialChunk(material_id=item.id, chunk_index=0, text=item.content))
+        db.commit()
+        book_id, material_id = book.id, material.id
+        assert search_evidence(db, question, source_document_id=book_id) == []
+
+    replies = iter([
+        {"answer": "", "evidence_ids": [], "retrieval_queries": ["混叠 奈奎斯特条件"], "tool_requests": []},
+        {"answer": "教材给出：信号带宽需低于抽取速率的一半，否则会发生混叠。", "evidence_ids": [material_id], "retrieval_queries": [], "tool_requests": [], "conversation_title": "抽样混叠与奈奎斯特条件"},
+    ])
+
+    async def model(self, *_args):
+        return next(replies)
+
+    monkeypatch.setattr(LLMAnswerer, "request_json", model)
+    response = client.post("/api/answers/ask", json={"question": question, "course_id": 1, "source_document_id": book_id})
+    assert response.status_code == 200
+    answer = response.json()
+    assert [item["material_id"] for item in answer["evidence"]] == [material_id]
+    assert answer["evidence"][0]["source_anchor"] == f"doc:{book_id}:p1"
+    assert answer["question"] == question
+    assert answer["conversation_title"] == "抽样混叠与奈奎斯特条件"
+    assert next(step for step in answer["agent_trace"] if step["step"] == "answer_generation")["cited_evidence_ids"] == [material_id]
+    assert client.get(f"/api/answers/{answer['answer_id']}").json()["evidence"] == answer["evidence"]

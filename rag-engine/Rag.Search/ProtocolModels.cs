@@ -4,6 +4,7 @@ internal sealed class SearchRequest
 {
     public SnapshotInput? Snapshot { get; init; }
     public required string Query { get; init; }
+    public string[]? AdditionalQueries { get; init; }
     public int? CourseId { get; init; }
     public int? TopicId { get; init; }
     public int? SourceDocumentId { get; init; }

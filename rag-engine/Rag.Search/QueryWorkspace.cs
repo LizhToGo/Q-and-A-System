@@ -16,16 +16,68 @@ internal sealed class QueryWorkspace
     private int[] marks = [];
     private byte[] sharedCounts = [];
     private int generation;
+    private readonly List<string> searchQueries = [];
+    private readonly HashSet<string> querySet = new(StringComparer.Ordinal);
+    private readonly List<SearchMatch>[] routes = [[], [], [], []];
+    private readonly int[] positions = new int[4];
 
     public IReadOnlyList<SearchMatch> Search(RetrievalSnapshot snapshot, SearchRequest request)
     {
         selected.Clear();
+        if (request.Limit == 0) return selected;
+        string original = PythonText.Lower(request.Query, textBuffer, normalizeWhitespace: true);
+        searchQueries.Clear();
+        querySet.Clear();
+        searchQueries.Add(original);
+        querySet.Add(original);
+        if (request.AdditionalQueries is not null)
+            foreach (string extra in request.AdditionalQueries)
+            {
+                string normalized = PythonText.Lower(extra, textBuffer, normalizeWhitespace: true);
+                if (normalized.Length > 0 && querySet.Add(normalized)) searchQueries.Add(normalized);
+            }
+        if (searchQueries.Count == 1)
+        {
+            SearchSingle(snapshot, request, original, selected, request.Limit);
+            return selected;
+        }
+        int candidateLimit = request.Limit < 0 ? int.MaxValue : request.Limit;
+        for (int i = 0; i < searchQueries.Count; i++)
+            SearchSingle(snapshot, request, searchQueries[i], routes[i], candidateLimit);
+        sources.Clear();
+        Array.Clear(positions);
+        // Each route gets one distinct source per turn. The original route goes
+        // first, so an expansion never replaces its highest-ranked exact hit.
+        bool added = true;
+        while (added && selected.Count < candidateLimit)
+        {
+            added = false;
+            for (int i = 0; i < searchQueries.Count && selected.Count < candidateLimit; i++)
+                while (positions[i] < routes[i].Count)
+                {
+                    SearchMatch match = routes[i][positions[i]++];
+                    if (!sources.Add(match.SourceKey)) continue;
+                    selected.Add(match);
+                    added = true;
+                    break;
+                }
+        }
+        if (request.Limit < 0)
+        {
+            int retained = Math.Max(0, selected.Count + request.Limit);
+            selected.RemoveRange(retained, selected.Count - retained);
+        }
+        return selected;
+    }
+
+    private void SearchSingle(RetrievalSnapshot snapshot, SearchRequest request, string query, List<SearchMatch> output, int limit)
+    {
+        output.Clear();
         ranked.Clear();
         sources.Clear();
         candidates.Clear();
-        if (request.Limit == 0) return selected;
-        PythonText.QueryTerms(PythonText.Lower(request.Query, textBuffer, normalizeWhitespace: true), terms, termSet);
-        if (terms.Count == 0) return selected;
+        PythonText.QueryTerms(query, terms, termSet);
+        if (terms.Count == 0) return;
         if (marks.Length < snapshot.MaterialCount) Array.Resize(ref marks, snapshot.MaterialCount);
         if (sharedCounts.Length < terms.Count) Array.Resize(ref sharedCounts, terms.Count);
         if (generation == int.MaxValue)
@@ -102,15 +154,14 @@ internal sealed class QueryWorkspace
         foreach (SearchMatch match in ranked)
         {
             if (!sources.Add(match.SourceKey)) continue;
-            selected.Add(match);
-            if (request.Limit >= 0 && selected.Count >= request.Limit) break;
+            output.Add(match);
+            if (limit >= 0 && output.Count >= limit) break;
         }
-        if (request.Limit < 0)
+        if (limit < 0)
         {
-            int retained = Math.Max(0, selected.Count + request.Limit);
-            selected.RemoveRange(retained, selected.Count - retained);
+            int retained = Math.Max(0, output.Count + limit);
+            output.RemoveRange(retained, output.Count - retained);
         }
-        return selected;
     }
 
     private bool MatchesFilters(IndexedMaterial material, SearchRequest request) =>

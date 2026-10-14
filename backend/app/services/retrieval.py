@@ -88,6 +88,8 @@ def search_evidence(
     material_ids: list[int] | None = None,
     source_document_id: int | None = None,
     limit: int = 8,
+    *,
+    additional_queries: list[str] | None = None,
 ) -> list[Evidence]:
     # Connection-level savepoints do not trigger Session.begin_nested's flush.
     # Explicit BEGIN also makes SQLite's legacy transaction mode hold one read
@@ -113,6 +115,7 @@ def search_evidence(
                     "topic_id": topic_id, "material_types": material_types,
                     "material_ids": material_ids, "source_document_id": source_document_id,
                     "limit": limit,
+                    "additional_queries": additional_queries,
                 })
                 results = _hydrate(connection, matches)
                 savepoint.commit()

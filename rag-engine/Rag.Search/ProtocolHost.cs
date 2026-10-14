@@ -27,6 +27,8 @@ public static class ProtocolHost
             {
                 SearchRequest? request = JsonSerializer.Deserialize<SearchRequest>(line, JsonOptions);
                 if (request is null || request.Query is null ||
+                    (request.AdditionalQueries is not null &&
+                     (request.AdditionalQueries.Length > 3 || Array.Exists(request.AdditionalQueries, static query => query is null))) ||
                     (request.MaterialTypes is not null && Array.Exists(request.MaterialTypes, static type => type is null)))
                     errorCode = "invalid_request";
                 else

@@ -322,13 +322,19 @@ async def ask_answer(request: AskRequest, db: Session = Depends(get_db), directo
     answerer = LLMAnswerer(provider_cfg)
     model_draft = await answerer.complete(request.question, evidence_payload, web_results, history=history, generate_title=generate_title)
     tool_results = []
+    retrieval_queries = model_draft.get("retrieval_queries", []) if model_draft else []
+    initial_evidence_count = len(evidence)
     planning_diagnostics = None
-    if model_draft and model_draft.get("tool_requests"):
+    if model_draft and (retrieval_queries or model_draft.get("tool_requests")):
         planning_diagnostics = dict(answerer.last_diagnostics)
-        tool_results = await execute_tool_requests(model_draft["tool_requests"])
-        explained = await answerer.complete(request.question, evidence_payload, web_results, history=history, tool_results=tool_results, generate_title=generate_title)
-        model_draft = explained
-        if explained is None:
+        if retrieval_queries:
+            evidence = search_evidence(db, retrieval_query, request.course_id, request.topic_id, source_document_id=request.source_document_id, limit=10, additional_queries=retrieval_queries)
+            evidence_payload = [evidence_dict(item) for item in evidence]
+            db.rollback()
+        if model_draft.get("tool_requests"):
+            tool_results = await execute_tool_requests(model_draft["tool_requests"])
+        model_draft = await answerer.complete(request.question, evidence_payload, web_results, history=history, tool_results=tool_results, generate_title=generate_title)
+        if model_draft is None and tool_results:
             explanation = "本地工具已经执行，但模型解释未返回可用结果；以下仅展示实际计算状态，图表和参数见本地计算卡片。"
             explanation += "\n\n" + "\n\n".join(f"{result['title']}：{result['summary']}" for result in tool_results)
             draft = {"answer": explanation, "evidence_ids": [], "provider": "local-tools"}
@@ -367,8 +373,10 @@ async def ask_answer(request: AskRequest, db: Session = Depends(get_db), directo
     if answerer.last_error:
         generation_trace["fallback_reason"] = answerer.last_error
     agent_trace = [generation_trace] + agent_trace
+    if retrieval_queries:
+        agent_trace.insert(1, {"step": "query_expansion", "status": "expanded", "original_query": retrieval_query, "queries": retrieval_queries, "initial_evidence_count": initial_evidence_count, "final_evidence_count": len(evidence_payload), "fusion": "original_first_round_robin", "planning": planning_diagnostics})
     if tool_results:
-        agent_trace.insert(1, {"step": "local_tools", "status": "completed" if all(result["status"] == "completed" for result in tool_results) else "partial_error", "tools": [{"id": result["id"], "tool": result["tool"], "status": result["status"]} for result in tool_results], "planning": planning_diagnostics})
+        agent_trace.insert(2 if retrieval_queries else 1, {"step": "local_tools", "status": "completed" if all(result["status"] == "completed" for result in tool_results) else "partial_error", "tools": [{"id": result["id"], "tool": result["tool"], "status": result["status"]} for result in tool_results], "planning": planning_diagnostics})
     record = AnswerRecord(question=request.question, answer=answer, course_id=request.course_id, topic_id=request.topic_id, result_json={"confidence": confidence, "traceability": traceability, "agent_trace": agent_trace, "risk_flags": confidence["reasons"], "evidence": [evidence_dict(item) for item in evidence], "tool_results": tool_results})
     db.add(record)
     db.flush()
