@@ -1,0 +1,79 @@
+name: knowledge-qa-12345
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    init: true
+    environment:
+      DATABASE_URL: sqlite:////app/data/knowledge.db
+      HOME: /tmp
+      MPLCONFIGDIR: /tmp/matplotlib
+      OPENBLAS_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      - type: bind
+        source: ./runtime/data
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./runtime/.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()"
+      interval: 20s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 360s
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    ports:
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-12345}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1/healthz"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -13,6 +13,60 @@
 
 首次导入结果会进入“待审核”状态。数字信号处理 PDF 有可读取的 OCR/文本层；另外三本主要是扫描页，系统会记录 `ocr_required`，不会把空 OCR 结果发布为知识库事实。视觉模型不可用时必须人工补录或审核。
 
+## Docker 部署
+
+生产部署使用独立 Compose 项目 `knowledge-qa-12345`：Nginx 提供前端静态文件并将同源 `/api` 转发给 FastAPI，只有前端端口对宿主机开放。数据库、教材、审核侧车、历史计算图像和模型配置通过 `runtime/` 持久化，不放进镜像或 Git。
+
+### 导出已有资料与配置
+
+在原项目根目录执行，输出目录必须是全新的：
+
+```powershell
+python -m backend.export_runtime --output runtime --include-config
+```
+
+导出使用 SQLite 在线备份，源数据库可继续运行；只在副本中把教材路径改为 `/app/data/uploads/` 下的 ASCII 文件名，核对原 PDF SHA256，保留问答、审核、原文、索引和公式。仅复制数据库引用的审核 JSON、原教材和历史工具 PNG，完成后写入 `runtime-manifest.json`；失败不留下可误用的“完成”清单，已有目录不会被覆盖。
+
+`--include-config` 显式携带现有 `.env`、provider 配置和已有管理口令；省略时不导出这些秘密，也不修改源配置。POSIX 导出目录权限为700、文件为600，Windows 访问控制仍由系统 ACL 管理。通过 SSH/SFTP 单独传输 `runtime/`，Linux 解压时使用 `umask 077`；不要执行 seed/reset 或用空目录覆盖现有运行数据。
+
+### 启动与运维
+
+服务器项目目录为 `/home/wgh/knowledge-qa-12345`，在该目录创建仅含部署参数的 `deploy.env`：
+
+```dotenv
+APP_BIND_HOST=10.102.7.77
+APP_PORT=12345
+APP_UID=1000
+APP_GID=1000
+```
+
+`runtime/` 必须属于这里指定的运行用户；该服务器 `wgh` 的 UID/GID 均为1000。没有指定部署参数时，端口默认只绑定 `127.0.0.1:12345`。
+
+```bash
+docker compose --env-file deploy.env -p knowledge-qa-12345 up -d --build --wait --wait-timeout 300
+docker compose --env-file deploy.env -p knowledge-qa-12345 ps
+docker compose --env-file deploy.env -p knowledge-qa-12345 logs --tail 100
+docker compose --env-file deploy.env -p knowledge-qa-12345 restart
+```
+
+访问 `http://10.102.7.77:12345/`，健康检查为 `/api/health`，管理页面为 `/admin`。上述命令仅作用于该独立项目，不使用宿主机网络、外部 Compose 网络或 Docker socket，不重启其他服务。后端以非root用户运行，运行资源上限为2 CPU/2GiB，前端为0.5 CPU/256MiB；日志轮转、健康检查和 `unless-stopped` 重启策略均已配置。
+
+Docker 构建约束 `numpy<2.4`：该服务器虚拟 CPU 缺少 NumPy 2.4 起要求的 [x86-64-v2 指令集](https://numpy.org/doc/2.4/release/2.4.0-notes.html)，不通过修改宿主机或关闭检查规避；实际镜像内 NumPy 2.3.5、非root OCR 和科学绘图已运行通过。前端生产构建和渲染回归不依赖本机私有教材 JSON。
+
+在服务器终端获取管理口令，填入管理界面的“管理口令”即可解锁；这不会改写模型 API key：
+
+```bash
+docker compose --env-file deploy.env -p knowledge-qa-12345 exec -T backend python -c "from backend.app.provider_config import get_admin_token; print(get_admin_token())"
+```
+
+运行期间也可生成新的完整备份，仍不覆盖已有输出：
+
+```bash
+docker compose --env-file deploy.env -p knowledge-qa-12345 exec -T backend python -m backend.export_runtime --output "/app/data/backups/$(date +%Y%m%d-%H%M%S)" --include-config
+```
+
+当前部署已验证四本教材原页、审核图表裁剪、真实模型 RAG 回答及本地波形/卷积 PNG；临时问答删除后，原97条答案、18个会话及其他数据库表指纹均与部署副本一致。服务器保留一次已验证的在线备份 `runtime/data/backups/deployment-verified/`。服务器使用独立数据副本，不与本地自动双向同步。
+
 ## 后端启动
 
 Python 3.13 已验证；建议使用虚拟环境：

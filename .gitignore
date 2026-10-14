@@ -8,6 +8,8 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 # Runtime databases, credentials, textbook bodies/images and checkpoints stay local.
+/runtime/
+/deploy.env
 data/*
 # Reviewed metadata-only progress reports are safe to share.
 !data/library-import-run-report.json

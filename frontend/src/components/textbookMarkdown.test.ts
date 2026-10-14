@@ -3,9 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { RichText } from './RichText'
 import { formatTextbookMarkdown } from './textbookMarkdown'
-import extractionPage from '../../../data/fullbook-review/page-481.json'
-import filterPage from '../../../data/fullbook-review/page-484.json'
-import interpolationPage from '../../../data/fullbook-review/page-486.json'
 
 function render(source: string, structure = true) {
   return renderToStaticMarkup(createElement(RichText, { text: formatTextbookMarkdown(source, { structure }), normalizeFormulas: false }))
@@ -315,12 +312,27 @@ https://example.test/$x$?formula=ωn
   })
 
   it.each([
-    { page: extractionPage, equation: '8.2.4', firstValue: '<mi>x</mi>', condition: '<mi>n</mi>' },
-    { page: filterPage, equation: '8.2.15', firstValue: '<mn>1</mn>', condition: '<mi>ω</mi>' },
-    { page: interpolationPage, equation: '8.3.2', firstValue: '<mi>x</mi>', condition: '<mi>n</mi>' },
-  ])('renders both reviewed cases rows on PDF page $page.page_number', ({ page, equation, firstValue, condition }) => {
+    { name: 'extraction', source: String.raw`\[
+x_p(n)=\begin{cases}
+x(n),&n=0,\pm D,\pm2D,\ldots\\
+0,&\text{其他 }n
+\end{cases}
+\]`, firstValue: '<mi>x</mi>', condition: '<mi>n</mi>' },
+    { name: 'filter', source: String.raw`\[
+H_d(e^{jω})=\begin{cases}
+1,&|ω|≤π/D\\
+0,&\text{其他 }ω
+\end{cases}
+\]`, firstValue: '<mn>1</mn>', condition: '<mi>ω</mi>' },
+    { name: 'interpolation', source: String.raw`\[
+x′_I(n)=\begin{cases}
+x(n/I),&n=0,±I,±2I,\ldots\\
+0,&\text{其他 }n
+\end{cases}
+\]`, firstValue: '<mi>x</mi>', condition: '<mi>n</mi>' },
+  ])('renders both $name cases rows with their values and conditions', ({ source, firstValue, condition }) => {
     for (const structure of [true, false]) {
-      const html = render(page.normalized_text, structure)
+      const html = render(source, structure)
       const math = (html.match(/<math\b[\s\S]*?<\/math>/g) ?? []).join('').replace(/<annotation\b[\s\S]*?<\/annotation>/g, '')
       const tables = math.match(/<mtable\b[\s\S]*?<\/mtable>/g) ?? []
       expect(tables).toHaveLength(1)
@@ -331,7 +343,6 @@ https://example.test/$x$?formula=ωn
       expect(rows[1]).toContain('<mn>0</mn>')
       expect(rows[1]).toContain('其他')
       expect(rows[1]).toContain(condition)
-      expect(html).toContain(equation)
       expect(html).not.toContain('katex-error')
     }
   })
