@@ -223,7 +223,7 @@ class LLMAnswerer:
             parsed, _end = json.JSONDecoder().raw_decode(_normalize_json_backslashes(value[start:]))
         return parsed if isinstance(parsed, dict) else None
 
-    async def complete(self, question: str, evidence: list[dict], web_results: list[dict] | None = None, history: list[dict[str, str]] | None = None) -> dict | None:
+    async def request_json(self, instructions: str, prompt: str) -> dict | None:
         self.last_error = None
         self.last_diagnostics = {}
 
@@ -235,28 +235,6 @@ class LLMAnswerer:
         if not self.enabled(cfg):
             self._failure("not_configured", "LLM 未启用或缺少 URL/API key", cfg)
             return None
-        context = "\n\n".join(
-            f"[教材证据 {item.get('material_id')}] {item.get('title')} {item.get('source_anchor')}\n{item.get('snippet')}"
-            for item in evidence
-        )
-        web_context = "\n\n".join(
-            f"[网络补充] {item.get('title')} {item.get('url')}\n{item.get('snippet')}"
-            for item in (web_results or [])
-        )
-        instructions = (
-            "只根据给定教材证据回答；网络补充必须明确标注。输出一个 JSON 对象：answer（字符串）、evidence_ids（整数列表）。"
-            "不能编造证据 ID、页码或 URL，evidence_ids 只能使用输入中出现的数字 material_id。"
-            "answer 使用 Markdown；数学表达式只使用 KaTeX 兼容的 $$...$$、\\(...\\) 或 \\[...\\] 定界，禁止裸公式。"
-            "JSON 字符串中的反斜杠必须正确转义。"
-            "历史对话仅用于理解当前问题，不是权威教材证据；不能沿用历史证据 ID，引用只能来自本次教材证据。"
-        )
-        prompt = f"问题：{question}\n教材证据：\n{context or '无'}\n网络补充：\n{web_context or '无'}"
-        if history:
-            bounded_history = [
-                {"question": turn["question"][:1200], "answer": turn["answer"][:2500]}
-                for turn in history[-3:]
-            ]
-            prompt = "历史对话（非教材证据）：\n" + json.dumps(bounded_history, ensure_ascii=False) + "\n当前" + prompt
         messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
         endpoint = cfg.base_url.rstrip("/")
         if not self._is_responses_endpoint(endpoint):
@@ -320,26 +298,7 @@ class LLMAnswerer:
                 if not parsed:
                     self._failure("invalid_json", "模型文本不是有效 JSON", cfg, status=int(getattr(response, "status_code", 200)))
                     return None
-                valid_ids = {str(item.get("material_id")) for item in evidence}
-                raw_ids = parsed.get("evidence_ids", [])
-                if not isinstance(raw_ids, list):
-                    self._failure("invalid_evidence_ids", "模型返回的 evidence_ids 不是列表", cfg, status=int(getattr(response, "status_code", 200)))
-                    return None
-                normalized_ids: list[int] = []
-                for item in raw_ids:
-                    text = str(item).strip()
-                    if text.isdigit():
-                        candidate = text
-                    else:
-                        match = re.fullmatch(r"\[?教材证据\s+(\d+)\]?", text)
-                        candidate = match.group(1) if match else ""
-                    if candidate in valid_ids:
-                        normalized_ids.append(int(candidate))
-                parsed["evidence_ids"] = list(dict.fromkeys(normalized_ids))
-                if not isinstance(parsed.get("answer"), str) or not parsed["answer"].strip() or not parsed["evidence_ids"]:
-                    self._failure("missing_answer_or_valid_evidence", "模型未提供回答或没有可验证的教材证据 ID", cfg, status=int(getattr(response, "status_code", 200)))
-                    return None
-                return {**parsed, "provider": cfg.provider}
+                return parsed
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             upstream = self._upstream_summary(exc.response, cfg.api_key)
@@ -385,6 +344,74 @@ class LLMAnswerer:
         except (KeyError, TypeError, ValueError) as exc:
             self._failure(f"response_{exc.__class__.__name__}", "上游响应结构无法解析", cfg)
             return None
+
+    async def complete(self, question: str, evidence: list[dict], web_results: list[dict] | None = None, history: list[dict[str, str]] | None = None, *, tool_results: list[dict] | None = None) -> dict | None:
+        from .local_tools import tool_instructions
+
+        context = "\n\n".join(
+            f"[教材证据 {item.get('material_id')}] {item.get('title')} {item.get('source_anchor')}\n{item.get('snippet')}"
+            for item in evidence
+        )
+        web_context = "\n\n".join(
+            f"[网络补充] {item.get('title')} {item.get('url')}\n{item.get('snippet')}"
+            for item in (web_results or [])
+        )
+        instructions = (
+            "根据给定教材证据回答；网络补充、本地计算和数值近似必须分别明确标注。"
+            "输出 JSON 对象：answer（Markdown字符串）、evidence_ids（整数列表）、tool_requests（可选列表）。"
+            "不能编造证据 ID、页码、图像或 URL，evidence_ids 只能来自本次输入的 material_id。"
+            "数学只使用 KaTeX 兼容的 $$...$$、\\(...\\) 或 \\[...\\]；JSON 反斜杠正确转义。"
+            "历史对话只用于理解问题，不是教材证据；引用只能来自本次检索。"
+        )
+        if tool_results is None:
+            instructions += (
+                "先判断是否需要计算/绘图。需要时，本轮仅提交执行计划：answer为空字符串，tool_requests列出操作；"
+                "不要提前计算结果或解释。普通概念问答才直接返回answer。"
+                "卷积必须使用convolution，禁止自己求出卷积结果后用waveform硬编码单点；"
+                "频响必须使用frequency_response。变换前后对照优先使用fourier，它会绘制同一函数的成对图，"
+                "不要拆成不同函数的waveform和fourier。基础例子可选gaussian、rectangular、constant、sinusoid；"
+                "精确阶跃及冲激导数等未支持的变换不得冒充constant，需明确限制或采用标注的有限窗近似。"
+                "不要声称无法绘制或谎称已执行。缺少必需参数才追问；一般举例可选取标准参数并在后续解释中说明。"
+                "没有教材证据仍可执行明确的本地数学计算，不得编造教材结论。一次最多4个请求。\n" + tool_instructions()
+            )
+        else:
+            instructions += (
+                "下面的本地工具已实际执行。只解释其真实结果、参数、条件和限制，tool_requests 必须为空。"
+                "completed才表示成功；error必须说明失败，不能编造结果。数值FFT不是精确连续傅里叶变换，"
+                "冲激谱是广义函数而非普通连续曲线。图像由前端展示，不在answer编造或插入图像链接。"
+            )
+        prompt = f"问题：{question}\n教材证据：\n{context or '无'}\n网络补充：\n{web_context or '无'}"
+        if history:
+            bounded = [{"question": turn["question"][:1200], "answer": turn["answer"][:2500]} for turn in history[-3:]]
+            prompt = "历史对话（非教材证据）：\n" + json.dumps(bounded, ensure_ascii=False) + "\n当前" + prompt
+        if tool_results is not None:
+            prompt += "\n已执行本地计算（不是教材证据）：\n" + json.dumps(tool_results, ensure_ascii=False)
+        parsed = await self.request_json(instructions, prompt)
+        if parsed is None:
+            return None
+        cfg = self.config or get_provider_config(settings)
+        requests = parsed.get("tool_requests", [])
+        if not isinstance(requests, list) or len(requests) > 4 or (tool_results is not None and requests):
+            self._failure("invalid_tool_requests", "模型工具请求不符合单轮执行约定", cfg)
+            return None
+        raw_ids = parsed.get("evidence_ids", [])
+        if not isinstance(raw_ids, list):
+            self._failure("invalid_evidence_ids", "模型返回的 evidence_ids 不是列表", cfg)
+            return None
+        valid_ids = {str(item.get("material_id")) for item in evidence}
+        normalized_ids: list[int] = []
+        for item in raw_ids:
+            text = str(item).strip()
+            match = re.fullmatch(r"\[?教材证据\s+(\d+)\]?", text)
+            candidate = text if text.isdigit() else match.group(1) if match else ""
+            if candidate in valid_ids:
+                normalized_ids.append(int(candidate))
+        parsed["evidence_ids"] = list(dict.fromkeys(normalized_ids))
+        has_computation = bool(requests or tool_results)
+        if not isinstance(parsed.get("answer"), str) or (not requests and not parsed["answer"].strip()) or (not parsed["evidence_ids"] and not has_computation):
+            self._failure("missing_answer_or_valid_evidence", "模型未提供回答或没有可验证的教材证据/本地计算", cfg)
+            return None
+        return {**parsed, "tool_requests": requests, "provider": cfg.provider}
 
 def build_local_answer(question: str, evidence: list[dict]) -> dict:
     if not evidence:

@@ -120,6 +120,9 @@ def test_unknown_conversation_and_omitted_id_never_attach_existing(client, monke
     second = client.post("/api/answers/ask", json={"question": "解释采样定理"}).json()
     assert len({existing["id"], first["conversation_id"], second["conversation_id"]}) == 3
     assert client.get(f"/api/conversations/{existing['id']}").json()["turns"] == []
+    listed_ids = {item["id"] for item in client.get("/api/conversations").json()}
+    assert listed_ids == {first["conversation_id"], second["conversation_id"]}
+    assert existing["id"] not in listed_ids
 
 
 def test_scope_changes_and_validate_only_orphans_are_preserved(client, monkeypatch):

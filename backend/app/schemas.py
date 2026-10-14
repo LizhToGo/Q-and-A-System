@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -134,6 +134,40 @@ class ConfidenceOut(BaseModel):
     reasons: list[str]
 
 
+class ToolArtifactOut(BaseModel):
+    id: str
+    url: str
+    caption: str
+
+
+class LocalToolResultOut(BaseModel):
+    id: str
+    tool: str
+    status: Literal["completed", "error"]
+    title: str
+    summary: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    artifacts: list[ToolArtifactOut] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class StudySuggestionsRequest(BaseModel):
+    course_id: int | None = None
+    topic_id: int | None = None
+    source_document_id: int | None = None
+    provider_id: str | None = Field(default=None, min_length=1, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    exclude: list[Annotated[str, Field(max_length=240)]] = Field(default_factory=list, max_length=12)
+
+
+class StudySuggestionsOut(BaseModel):
+    suggestions: list[str]
+    provider: str
+    model: str
+    evidence_ids: list[int]
+
+
 class ValidateResponse(BaseModel):
     answer_id: int
     conversation_id: int | None = None
@@ -145,6 +179,7 @@ class ValidateResponse(BaseModel):
     risk_flags: list[str]
     traceability: dict[str, Any]
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    tool_results: list[LocalToolResultOut] = Field(default_factory=list)
 
 
 class ConversationCreate(BaseModel):

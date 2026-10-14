@@ -88,6 +88,31 @@ export interface Traceability {
   [key: string]: unknown
 }
 
+export interface LocalToolResult {
+  id: string
+  tool: string
+  status: 'completed' | 'error'
+  title: string
+  summary: string
+  parameters: Record<string, unknown>
+  artifacts: Array<{ id: string; url: string; caption: string }>
+  data: Record<string, unknown>
+  notes: string[]
+}
+
+export interface StudySuggestionsRequest extends Partial<ConversationScope> {
+  provider_id?: string
+  model?: string
+  exclude?: string[]
+}
+
+export interface StudySuggestionsResponse {
+  suggestions: string[]
+  provider: string
+  model: string
+  evidence_ids: number[]
+}
+
 export interface ValidateResponse {
   answer_id: number
   conversation_id: number | null
@@ -99,6 +124,7 @@ export interface ValidateResponse {
   risk_flags: string[]
   traceability: Traceability
   agent_trace: Array<Record<string, unknown>>
+  tool_results?: LocalToolResult[]
 }
 
 export interface ConversationScope {
@@ -291,12 +317,12 @@ export const api = {
   health: () => request<HealthResponse>('/health'),
   courses: () => request<Course[]>('/courses'),
   conversations: () => request<Conversation[]>('/conversations'),
-  createConversation: (scope: Partial<ConversationScope> = {}) => request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify(scope) }),
   conversation: (id: number) => request<ConversationDetail>(`/conversations/${encodeURIComponent(String(id))}`),
   sourceDocuments: (courseId?: number) => request<SourceDocument[]>(`/source-documents${queryString({ course_id: courseId })}`),
   topics: (courseId?: number) => request<Topic[]>(`/topics${queryString({ course_id: courseId })}`),
   materialEvidence: (id: number) => request<EvidenceItem>(`/materials/${encodeURIComponent(String(id))}/evidence`),
   ask: (payload: AskRequest) => request<ValidateResponse>('/answers/ask', { method: 'POST', body: JSON.stringify(payload) }),
+  studySuggestions: (payload: StudySuggestionsRequest) => request<StudySuggestionsResponse>('/study-suggestions', { method: 'POST', body: JSON.stringify(payload) }),
   metrics: () => request<Metrics>('/metrics'),
   ingestion: {
     upload: (file: File, courseId: number) => {

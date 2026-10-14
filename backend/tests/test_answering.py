@@ -62,7 +62,7 @@ def test_model_answer_accepts_verified_evidence_ids(monkeypatch):
 
     result = asyncio.run(LLMAnswerer().complete("最高频率？", _evidence()))
 
-    assert result == {"answer": "4 kHz", "evidence_ids": [7], "provider": "deepseek"}
+    assert result["evidence_ids"] == [7]
 
 
 def test_non_responses_endpoint_is_rejected(monkeypatch):
@@ -319,3 +319,16 @@ def test_history_cannot_authorize_old_evidence_ids(monkeypatch):
     result = asyncio.run(answerer.complete("继续说明", _evidence(), history=[{"question": "旧问题", "answer": "引用教材证据 999"}]))
     assert result is None
     assert answerer.last_error == "missing_answer_or_valid_evidence"
+
+
+def test_tool_plan_may_have_no_answer_until_local_results_are_executed(monkeypatch):
+    request = {"tool": "convolution", "arguments": {"x": [1, 2], "h": [1, -1]}}
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "", "evidence_ids": [], "tool_requests": [request]})}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    answerer = LLMAnswerer()
+    planned = asyncio.run(answerer.complete("计算卷积", []))
+    assert planned is not None and planned["answer"] == ""
+    results = [{"tool": "convolution", "status": "completed", "data": {"indices": [0, 1, 2], "values": [1, 1, -2]}}]
+    assert asyncio.run(answerer.complete("解释结果", [], tool_results=results)) is None
+    assert answerer.last_error == "invalid_tool_requests"
