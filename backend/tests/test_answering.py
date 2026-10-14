@@ -332,3 +332,43 @@ def test_tool_plan_may_have_no_answer_until_local_results_are_executed(monkeypat
     results = [{"tool": "convolution", "status": "completed", "data": {"indices": [0, 1, 2], "values": [1, 1, -2]}}]
     assert asyncio.run(answerer.complete("解释结果", [], tool_results=results)) is None
     assert answerer.last_error == "invalid_tool_requests"
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("采样定理与信号混叠", "采样定理与信号混叠"),
+    (None, None),
+    ("", None),
+    ("$采样定理$", None),
+    ("主题" * 17, None),
+    ({"text": "采样定理"}, None),
+])
+def test_first_answer_title_is_optional_and_never_invalidates_valid_answer(monkeypatch, title, expected):
+    FakeAsyncClient.calls = []
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "4 kHz", "evidence_ids": [7], "conversation_title": title}, ensure_ascii=False)}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    answerer = LLMAnswerer()
+    result = asyncio.run(answerer.complete("最高频率？", _evidence(), generate_title=True))
+    assert result["answer"] == "4 kHz" and result["evidence_ids"] == [7]
+    assert result["conversation_title"] == expected
+    assert answerer.last_error is None
+    assert len(FakeAsyncClient.calls) == 1
+
+
+def test_title_comes_from_final_tool_explanation_not_empty_planning_round(monkeypatch):
+    FakeAsyncClient.calls = []
+    request = {"tool": "convolution", "arguments": {"x": [1, 2], "h": [1, -1]}}
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "", "evidence_ids": [], "tool_requests": [request], "conversation_title": "提前猜测的错误主题"})}
+    monkeypatch.setattr(answering, "settings", _settings("https://example.test/v1/responses"))
+    monkeypatch.setattr(answering.httpx, "AsyncClient", FakeAsyncClient)
+    answerer = LLMAnswerer()
+    plan = asyncio.run(answerer.complete("计算卷积", [], generate_title=True))
+    assert plan["tool_requests"] == [request] and plan["conversation_title"] is None
+    results = [{"tool": "convolution", "status": "completed", "data": {"indices": [0, 1, 2], "values": [1, 1, -2]}}]
+    FakeAsyncClient.response_body = {"output_text": json.dumps({"answer": "实际离散卷积结果为1、1、-2。", "evidence_ids": [], "conversation_title": "离散序列的卷积计算"})}
+    final = asyncio.run(answerer.complete("计算卷积", [], tool_results=results, generate_title=True))
+    assert final["answer"] == "实际离散卷积结果为1、1、-2。"
+    assert final["conversation_title"] == "离散序列的卷积计算"
+    assert len(FakeAsyncClient.calls) == 2
+    later = asyncio.run(answerer.complete("继续解释", [], tool_results=results))
+    assert later["conversation_title"] is None

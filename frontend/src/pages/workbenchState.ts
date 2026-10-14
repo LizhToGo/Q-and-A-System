@@ -1,4 +1,4 @@
-import type { AskRequest, Conversation, ConversationDetail, ConversationScope, StudySuggestionsRequest, StudySuggestionsResponse, ValidateResponse } from '../api'
+import type { AskRequest, Conversation, ConversationDetail, ConversationScope, ConversationTitlesRequest, ConversationTitleSource, StudySuggestionsRequest, StudySuggestionsResponse, ValidateResponse } from '../api'
 
 export const emptyScope: ConversationScope = { course_id: null, topic_id: null, source_document_id: null }
 export type ChatThread = {
@@ -6,20 +6,24 @@ export type ChatThread = {
   conversationId: number | null
   scope: ConversationScope
   title: string
+  titleSource: ConversationTitleSource
   updatedAt: string
   turns: ValidateResponse[]
   draft: string
   error: string
   pending: boolean
   pendingQuestion: string
+  deleting: boolean
   loaded: boolean
 }
 type ChatApi = {
   conversations: () => Promise<Conversation[]>
   conversation: (id: number) => Promise<ConversationDetail>
   ask: (request: AskRequest) => Promise<ValidateResponse>
+  deleteConversation: (id: number) => Promise<void>
+  summarizeConversationTitles: (request: ConversationTitlesRequest) => Promise<Conversation[]>
 }
-type ChatSnapshot = { threads: Record<string, ChatThread>; activeKey: string; loading: boolean; error: string }
+type ChatSnapshot = { threads: Record<string, ChatThread>; activeKey: string; loading: boolean; error: string; titlesLoading: boolean; titleError: string }
 const errorMessage = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback
 
 // Local identity never changes when the server assigns an ID. In-flight work only
@@ -29,20 +33,21 @@ export class ChatSession {
   private listeners = new Set<() => void>()
   private initialization: Promise<void> | null = null
   private historyRequests = new Set<string>()
+  private attemptedTitles = new Set<number>()
   private snapshot: ChatSnapshot
 
   constructor(private client: ChatApi, private remember: (id: number | null) => void = () => {}) {
     const draft = this.makeDraft()
-    this.snapshot = { threads: { [draft.key]: draft }, activeKey: draft.key, loading: true, error: '' }
+    this.snapshot = { threads: { [draft.key]: draft }, activeKey: draft.key, loading: true, error: '', titlesLoading: false, titleError: '' }
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   getSnapshot = () => this.snapshot
   private publish(next: ChatSnapshot) { this.snapshot = next; this.listeners.forEach((listener) => listener()) }
   private makeDraft(): ChatThread {
-    return { key: `draft-${++this.sequence}`, conversationId: null, scope: { ...emptyScope }, title: '未保存的草稿', updatedAt: '', turns: [], draft: '', error: '', pending: false, pendingQuestion: '', loaded: true }
+    return { key: `draft-${++this.sequence}`, conversationId: null, scope: { ...emptyScope }, title: '未保存的草稿', titleSource: 'pending', updatedAt: '', turns: [], draft: '', error: '', pending: false, pendingQuestion: '', deleting: false, loaded: true }
   }
   private fromConversation(item: Conversation, turns?: ValidateResponse[]): ChatThread {
-    return { key: `conversation-${item.id}`, conversationId: item.id, scope: { course_id: item.course_id, topic_id: item.topic_id, source_document_id: item.source_document_id }, title: item.title, updatedAt: item.updated_at, turns: turns ?? [], draft: '', error: '', pending: false, pendingQuestion: '', loaded: turns !== undefined }
+    return { key: `conversation-${item.id}`, conversationId: item.id, scope: { course_id: item.course_id, topic_id: item.topic_id, source_document_id: item.source_document_id }, title: item.title, titleSource: item.title_source, updatedAt: item.updated_at, turns: turns ?? [], draft: '', error: '', pending: false, pendingQuestion: '', deleting: false, loaded: turns !== undefined }
   }
   private update(key: string, change: (thread: ChatThread) => ChatThread) {
     const thread = this.snapshot.threads[key]
@@ -95,7 +100,7 @@ export class ChatSession {
     const key = this.snapshot.activeKey
     const thread = this.snapshot.threads[key]
     const question = thread.draft.trim()
-    if (!question || thread.pending || !thread.loaded) return
+    if (!question || thread.pending || thread.deleting || !thread.loaded) return
     this.update(key, (value) => ({ ...value, pending: true, pendingQuestion: question, error: '', draft: '' }))
     try {
       const result = await this.client.ask({
@@ -105,10 +110,60 @@ export class ChatSession {
         ...(model.model.trim() ? { model: model.model.trim() } : {}), use_web: false,
       })
       if (!result.conversation_id || result.conversation_id <= 0) throw new Error('服务未返回有效对话编号，请重试。')
-      this.update(key, (value) => ({ ...value, conversationId: result.conversation_id, pending: false, pendingQuestion: '', turns: [...value.turns, { ...result, question }], title: value.turns.length ? value.title : question.replace(/\s+/g, ' ').slice(0, 80), updatedAt: new Date().toISOString() }))
+      this.update(key, (value) => ({ ...value, conversationId: result.conversation_id, pending: false, pendingQuestion: '', turns: [...value.turns, { ...result, question }], title: result.conversation_title!, titleSource: result.conversation_title_source!, updatedAt: new Date().toISOString() }))
       if (this.snapshot.activeKey === key) this.remember(result.conversation_id)
     } catch (reason) {
       this.update(key, (value) => ({ ...value, pending: false, pendingQuestion: '', draft: value.draft || question, error: errorMessage(reason, '回答生成失败，请稍后重试。') }))
+    }
+  }
+  async generatePendingTitles(model: { providerId: string; model: string }, retry = false) {
+    if (this.snapshot.titlesLoading || !model.providerId || !model.model.trim()) return
+    if (retry) this.attemptedTitles.clear()
+    else if (this.snapshot.titleError) return
+    const targets = Object.values(this.snapshot.threads).filter((thread) => thread.conversationId !== null && thread.titleSource === 'pending' && !thread.pending && !thread.deleting && !this.attemptedTitles.has(thread.conversationId))
+    if (!targets.length) return
+    targets.forEach((thread) => this.attemptedTitles.add(thread.conversationId!))
+    this.publish({ ...this.snapshot, titlesLoading: true, titleError: '' })
+    try {
+      for (let offset = 0; offset < targets.length; offset += 32) {
+        const ids = targets.slice(offset, offset + 32).filter((target) => this.snapshot.threads[target.key]?.conversationId === target.conversationId && !this.snapshot.threads[target.key].deleting).map((thread) => thread.conversationId!)
+        if (!ids.length) continue
+        const updated = await this.client.summarizeConversationTitles({ conversation_ids: ids, provider_id: model.providerId, model: model.model.trim() })
+        const titles = new Map(updated.map((item) => [item.id, item]))
+        const threads = { ...this.snapshot.threads }
+        for (const [key, thread] of Object.entries(threads)) {
+          const item = thread.conversationId === null ? undefined : titles.get(thread.conversationId)
+          if (item) threads[key] = { ...thread, title: item.title, titleSource: item.title_source }
+        }
+        this.publish({ ...this.snapshot, threads })
+      }
+    } catch (reason) {
+      this.publish({ ...this.snapshot, titleError: errorMessage(reason, '对话标题生成失败，可手动重试。') })
+    } finally {
+      this.publish({ ...this.snapshot, titlesLoading: false })
+    }
+  }
+  async deleteConversation(key: string): Promise<boolean> {
+    const target = this.snapshot.threads[key]
+    if (!target || target.conversationId === null || target.pending || target.deleting) return false
+    this.update(key, (thread) => ({ ...thread, deleting: true, error: '' }))
+    try {
+      await this.client.deleteConversation(target.conversationId)
+      const threads = { ...this.snapshot.threads }
+      delete threads[key]
+      this.attemptedTitles.delete(target.conversationId)
+      let activeKey = this.snapshot.activeKey
+      if (activeKey === key) {
+        const draft = this.makeDraft()
+        threads[draft.key] = draft
+        activeKey = draft.key
+        this.remember(null)
+      }
+      this.publish({ ...this.snapshot, threads, activeKey })
+      return true
+    } catch (reason) {
+      this.update(key, (thread) => ({ ...thread, deleting: false, error: errorMessage(reason, '删除失败，对话仍保留。') }))
+      return false
     }
   }
 }

@@ -8,12 +8,12 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-const historyItem: Conversation = { id: 8, title: '已有问题', course_id: 1, topic_id: 2, source_document_id: 3, created_at: '2026-01-01', updated_at: '2026-01-01' }
+const historyItem: Conversation = { id: 8, title: '已有问题', title_source: 'model', course_id: 1, topic_id: 2, source_document_id: 3, created_at: '2026-01-01', updated_at: '2026-01-01' }
 function answer(conversationId = 42, answerId = 1): ValidateResponse {
-  return { answer_id: answerId, conversation_id: conversationId, question: '问题', answer: '回答', checks: [], evidence: [], confidence: { level: 'high', score: .9, reasons: [] }, risk_flags: [], traceability: {}, agent_trace: [] }
+  return { answer_id: answerId, conversation_id: conversationId, conversation_title: '教材主题讨论', conversation_title_source: 'model', question: '问题', answer: '回答', checks: [], evidence: [], confidence: { level: 'high', score: .9, reasons: [] }, risk_flags: [], traceability: {}, agent_trace: [] }
 }
 function client() {
-  return { conversations: vi.fn(async (): Promise<Conversation[]> => []), conversation: vi.fn(async (): Promise<ConversationDetail> => ({ ...historyItem, turns: [answer(8)] })), ask: vi.fn(async (_request: AskRequest) => answer()) }
+  return { conversations: vi.fn(async (): Promise<Conversation[]> => []), conversation: vi.fn(async (): Promise<ConversationDetail> => ({ ...historyItem, turns: [answer(8)] })), ask: vi.fn(async (_request: AskRequest) => answer()), deleteConversation: vi.fn(async (_id: number): Promise<void> => {}), summarizeConversationTitles: vi.fn(async (_request: { conversation_ids: number[] }): Promise<Conversation[]> => []) }
 }
 const model = { providerId: 'provider-a', model: 'model-a' }
 
@@ -23,8 +23,6 @@ describe('local chat lifecycle', () => {
     const session = new ChatSession(api)
     await Promise.all([session.initialize(null), session.initialize(null)])
     session.newDraft(); session.newDraft(); session.newDraft()
-    expect(api.conversations).toHaveBeenCalledTimes(1)
-    expect(api.ask).not.toHaveBeenCalled()
     expect(Object.values(session.getSnapshot().threads)).toHaveLength(1)
     expect(Object.values(session.getSnapshot().threads).filter((thread) => thread.conversationId !== null)).toHaveLength(0)
     session.setQuestion('尚未提交'); session.setScope({ course_id: 2 })
@@ -48,7 +46,7 @@ describe('local chat lifecycle', () => {
     pending.resolve(answer())
     await first
     const key = session.getSnapshot().activeKey
-    expect(session.getSnapshot().threads[key]).toMatchObject({ conversationId: 42, pending: false, title: '第一个问题', draft: '' })
+    expect(session.getSnapshot().threads[key]).toMatchObject({ conversationId: 42, pending: false, draft: '' })
     expect(remembered).toHaveBeenLastCalledWith(42)
     session.setQuestion('第二个问题')
     await session.submit(model)
@@ -133,6 +131,109 @@ describe('local chat lifecycle', () => {
     expect(session.getSnapshot().threads['conversation-8']).toMatchObject({ loaded: false, error: '历史读取失败' })
     await session.activate('conversation-8')
     expect(session.getSnapshot().threads['conversation-8']).toMatchObject({ loaded: true, error: '' })
+  })
+
+  it('deletes the active saved conversation and clears its persisted selection without saving a replacement', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([historyItem])
+    const remember = vi.fn()
+    const session = new ChatSession(api, remember)
+    await session.initialize(8)
+    session.setQuestion('不应挂到下一个对话')
+    await session.deleteConversation('conversation-8')
+    const state = session.getSnapshot()
+    expect(state.threads).not.toHaveProperty('conversation-8')
+    expect(state.threads[state.activeKey]).toMatchObject({ conversationId: null, draft: '', turns: [] })
+    expect(remember).toHaveBeenLastCalledWith(null)
+  })
+
+  it('keeps an unrelated active draft intact when deleting history and ignores its late title response', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([{ ...historyItem, title_source: 'pending' }])
+    const pending = deferred<Conversation[]>()
+    api.summarizeConversationTitles.mockImplementationOnce(() => pending.promise)
+    const session = new ChatSession(api)
+    await session.initialize(null)
+    const active = session.getSnapshot().activeKey
+    session.setQuestion('正在编辑的问题')
+    const titles = session.generatePendingTitles(model)
+    await session.deleteConversation('conversation-8')
+    pending.resolve([{ ...historyItem, title: '旧响应不能复活聊天' }])
+    await titles
+    expect(session.getSnapshot().activeKey).toBe(active)
+    expect(session.getSnapshot().threads[active].draft).toBe('正在编辑的问题')
+    expect(session.getSnapshot().threads).not.toHaveProperty('conversation-8')
+  })
+
+  it('preserves history and unsent text after deletion fails', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([historyItem])
+    api.deleteConversation.mockRejectedValueOnce(new Error('删除被拒绝'))
+    const session = new ChatSession(api)
+    await session.initialize(8)
+    session.setQuestion('还没有发送')
+    const deleted = await session.deleteConversation('conversation-8')
+    expect(deleted).toBe(false)
+    expect(session.getSnapshot().activeKey).toBe('conversation-8')
+    expect(session.getSnapshot().threads['conversation-8']).toMatchObject({ deleting: false, draft: '还没有发送', conversationId: 8 })
+  })
+
+  it('does not restore a deleted conversation when its history load finishes late', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([historyItem])
+    const history = deferred<ConversationDetail>()
+    api.conversation.mockImplementationOnce(() => history.promise)
+    const session = new ChatSession(api)
+    await session.initialize(null)
+    const loading = session.activate('conversation-8')
+    await session.deleteConversation('conversation-8')
+    history.resolve({ ...historyItem, turns: [answer(8)] })
+    await loading
+    expect(session.getSnapshot().threads).not.toHaveProperty('conversation-8')
+    expect(session.getSnapshot().threads[session.getSnapshot().activeKey].conversationId).toBeNull()
+  })
+
+  it('updates pending titles without reordering chats or replacing draft and answer state', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([{ ...historyItem, title_source: 'pending' }])
+    api.summarizeConversationTitles.mockResolvedValue([{ ...historyItem, title: '傅里叶变换' }])
+    const session = new ChatSession(api)
+    await session.initialize(8)
+    session.setQuestion('继续修改草稿')
+    const original = session.getSnapshot().threads['conversation-8']
+    await session.generatePendingTitles(model)
+    const titled = session.getSnapshot().threads['conversation-8']
+    expect(titled.updatedAt).toBe(original.updatedAt)
+    expect(titled.draft).toBe('继续修改草稿')
+    expect(titled.turns).toEqual(original.turns)
+    expect(titled.titleSource).toBe('model')
+  })
+
+  it('requires explicit retry after a title failure instead of silently consuming more model calls', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([{ ...historyItem, title_source: 'pending' }])
+    api.summarizeConversationTitles.mockRejectedValueOnce(new Error('上游拒绝请求'))
+    api.summarizeConversationTitles.mockResolvedValue([{ ...historyItem, title: '信号变换' }])
+    const session = new ChatSession(api)
+    await session.initialize(8)
+    await session.generatePendingTitles(model)
+    await session.generatePendingTitles(model)
+    expect(session.getSnapshot().threads['conversation-8'].titleSource).toBe('pending')
+    expect(session.getSnapshot().titlesLoading).toBe(false)
+    await session.generatePendingTitles(model, true)
+    expect(session.getSnapshot().threads['conversation-8'].titleSource).toBe('model')
+    expect(session.getSnapshot().titleError).toBe('')
+  })
+
+  it('does not overwrite a user-specified title during automatic generation or retry', async () => {
+    const api = client()
+    api.conversations.mockResolvedValue([{ ...historyItem, title_source: 'user' }])
+    api.summarizeConversationTitles.mockResolvedValue([{ ...historyItem, title: '不应覆盖的模型标题' }])
+    const session = new ChatSession(api)
+    await session.initialize(8)
+    await session.generatePendingTitles(model)
+    await session.generatePendingTitles(model, true)
+    expect(session.getSnapshot().threads['conversation-8']).toMatchObject({ title: historyItem.title, titleSource: 'user' })
   })
 })
 

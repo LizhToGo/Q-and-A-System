@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -20,8 +20,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 def create_tables() -> None:
     from . import models  # noqa: F401
 
-    # Additive tables only: existing answer_records and their history are untouched.
     Base.metadata.create_all(bind=engine)
+    # create_all does not add columns to existing SQLite tables.
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspect(connection).get_columns("conversations")}
+        if "title_source" not in columns:
+            connection.execute(text("ALTER TABLE conversations ADD COLUMN title_source VARCHAR(20) NOT NULL DEFAULT 'pending'"))
 
 
 def get_db() -> Generator[Session, None, None]:

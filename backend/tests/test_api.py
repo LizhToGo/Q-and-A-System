@@ -56,7 +56,7 @@ def test_validate_missing_unit_is_public_failure_and_history_is_readable(client)
 def test_model_failure_is_explicit_and_never_claims_model_citations(client, monkeypatch):
     from backend.app.services.answering import LLMAnswerer
 
-    async def unavailable(self, question, evidence, web_results=None):
+    async def unavailable(self, question, evidence, web_results=None, history=None, *, generate_title=False):
         self.last_error = "not_configured"
         return None
 

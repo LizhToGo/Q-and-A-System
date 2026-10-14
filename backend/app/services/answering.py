@@ -47,6 +47,18 @@ def _normalize_json_backslashes(value: str) -> str:
     return "".join(output)
 
 
+def normalize_conversation_title(value: object) -> str | None:
+    """A missing/malformed title must not invalidate an otherwise useful answer."""
+    if not isinstance(value, str):
+        return None
+    title = value.strip()
+    if not 2 <= len(title) <= 32 or any(ord(char) < 32 for char in title):
+        return None
+    if any(char in title for char in "`*$\\#_[]<>"):
+        return None
+    return title
+
+
 class LLMAnswerer:
     """可选 OpenAI-compatible Responses API 适配器。"""
 
@@ -345,7 +357,7 @@ class LLMAnswerer:
             self._failure(f"response_{exc.__class__.__name__}", "上游响应结构无法解析", cfg)
             return None
 
-    async def complete(self, question: str, evidence: list[dict], web_results: list[dict] | None = None, history: list[dict[str, str]] | None = None, *, tool_results: list[dict] | None = None) -> dict | None:
+    async def complete(self, question: str, evidence: list[dict], web_results: list[dict] | None = None, history: list[dict[str, str]] | None = None, *, tool_results: list[dict] | None = None, generate_title: bool = False) -> dict | None:
         from .local_tools import tool_instructions
 
         context = "\n\n".join(
@@ -363,6 +375,12 @@ class LLMAnswerer:
             "数学只使用 KaTeX 兼容的 $$...$$、\\(...\\) 或 \\[...\\]；JSON 反斜杠正确转义。"
             "历史对话只用于理解问题，不是教材证据；引用只能来自本次检索。"
         )
+        if generate_title:
+            instructions += (
+                "这是尚未命名对话的首轮。直接回答或工具执行后的最终解释须在同一JSON中附conversation_title："
+                "根据首次问题与本轮真实回答总结短中文主题名，约6至20字，最多32字符，无Markdown或公式包裹。"
+                "工具规划轮answer为空时不要生成标题。标题不是问题原文的截断。"
+            )
         if tool_results is None:
             instructions += (
                 "先判断是否需要计算/绘图。需要时，本轮仅提交执行计划：answer为空字符串，tool_requests列出操作；"
@@ -411,6 +429,7 @@ class LLMAnswerer:
         if not isinstance(parsed.get("answer"), str) or (not requests and not parsed["answer"].strip()) or (not parsed["evidence_ids"] and not has_computation):
             self._failure("missing_answer_or_valid_evidence", "模型未提供回答或没有可验证的教材证据/本地计算", cfg)
             return None
+        parsed["conversation_title"] = normalize_conversation_title(parsed.get("conversation_title")) if generate_title and not requests else None
         return {**parsed, "tool_requests": requests, "provider": cfg.provider}
 
 def build_local_answer(question: str, evidence: list[dict]) -> dict:

@@ -155,6 +155,7 @@ class Conversation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(200), default="新建对话", nullable=False)
+    title_source: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending", nullable=False)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     topic_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_topics.id"), nullable=True)
     source_document_id: Mapped[int | None] = mapped_column(ForeignKey("source_documents.id"), nullable=True)

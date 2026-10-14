@@ -116,6 +116,8 @@ export interface StudySuggestionsResponse {
 export interface ValidateResponse {
   answer_id: number
   conversation_id: number | null
+  conversation_title: string | null
+  conversation_title_source: ConversationTitleSource | null
   question: string
   answer: string
   checks: ValidationCheck[]
@@ -133,9 +135,17 @@ export interface ConversationScope {
   source_document_id: number | null
 }
 
+export type ConversationTitleSource = 'pending' | 'model' | 'user'
+export interface ConversationTitlesRequest {
+  conversation_ids: number[]
+  provider_id?: string
+  model?: string
+}
+
 export interface Conversation extends ConversationScope {
   id: number
   title: string
+  title_source: ConversationTitleSource
   created_at: string
   updated_at: string
 }
@@ -318,6 +328,8 @@ export const api = {
   courses: () => request<Course[]>('/courses'),
   conversations: () => request<Conversation[]>('/conversations'),
   conversation: (id: number) => request<ConversationDetail>(`/conversations/${encodeURIComponent(String(id))}`),
+  deleteConversation: (id: number) => request<void>(`/conversations/${encodeURIComponent(String(id))}`, { method: 'DELETE' }),
+  summarizeConversationTitles: (payload: ConversationTitlesRequest) => request<Conversation[]>('/conversations/titles', { method: 'POST', body: JSON.stringify(payload) }),
   sourceDocuments: (courseId?: number) => request<SourceDocument[]>(`/source-documents${queryString({ course_id: courseId })}`),
   topics: (courseId?: number) => request<Topic[]>(`/topics${queryString({ course_id: courseId })}`),
   materialEvidence: (id: number) => request<EvidenceItem>(`/materials/${encodeURIComponent(String(id))}/evidence`),

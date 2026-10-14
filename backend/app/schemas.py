@@ -171,6 +171,8 @@ class StudySuggestionsOut(BaseModel):
 class ValidateResponse(BaseModel):
     answer_id: int
     conversation_id: int | None = None
+    conversation_title: str | None = None
+    conversation_title_source: Literal["pending", "model", "user"] | None = None
     question: str
     answer: str
     checks: list[ValidationResultOut]
@@ -186,6 +188,13 @@ class ConversationCreate(BaseModel):
     course_id: int | None = None
     topic_id: int | None = None
     source_document_id: int | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ConversationTitlesRequest(BaseModel):
+    conversation_ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=32)
+    provider_id: str | None = Field(default=None, min_length=1, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ConversationOut(ConversationCreate):
@@ -193,6 +202,7 @@ class ConversationOut(ConversationCreate):
 
     id: int
     title: str
+    title_source: Literal["pending", "model", "user"]
     created_at: datetime
     updated_at: datetime
 
