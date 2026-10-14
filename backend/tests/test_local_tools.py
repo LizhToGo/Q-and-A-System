@@ -30,6 +30,16 @@ def test_continuous_and_discrete_waveforms_use_correct_coordinates():
     np.testing.assert_allclose(boundaries, [.5, 1.5, 1.5])
 
 
+def test_mathematical_caret_has_power_precedence_and_preserves_safety():
+    grid = np.array([-2., -1., 0., 1., 2.])
+    np.testing.assert_allclose(expression_values("exp(-t^2)", grid), np.exp(-(grid ** 2)))
+    np.testing.assert_allclose(expression_values("2*t^2+1", grid), 2 * grid ** 2 + 1)
+    np.testing.assert_allclose(expression_values("(-t)^3", grid), (-grid) ** 3)
+    for expression in ["t^t", "t^100", "t^(-33)", "np.exp(-t^2)", "t[0]^2", "__import__('os').system('whoami')^2"]:
+        with pytest.raises(ToolInputError):
+            expression_values(expression, grid)
+
+
 def test_exact_gaussian_and_shifted_rectangular_fourier():
     args = {"mode": "gaussian", "amplitude": 2, "sigma": .5, "center": 1, "omega_min": -4, "omega_max": 4, "samples": 17}
     result = compute("fourier", args)

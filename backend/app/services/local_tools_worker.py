@@ -53,7 +53,8 @@ def expression_values(expression, grid, variable="t"):
     if not isinstance(expression, str) or not 1 <= len(expression) <= 512:
         raise ToolInputError("expression must contain 1..512 characters")
     try:
-        tree = ast.parse(expression, mode="eval")
+        # Mathematical caret is exponentiation, never Python's bitwise XOR.
+        tree = ast.parse(expression.replace("^", "**"), mode="eval")
     except (SyntaxError, RecursionError) as exc:
         raise ToolInputError("Invalid expression syntax") from exc
     if sum(1 for _ in ast.walk(tree)) > 128:
@@ -89,14 +90,13 @@ def expression_values(expression, grid, variable="t"):
             value = visit(node.operand, depth + 1)
             return -value if isinstance(node.op, ast.USub) else value
         if isinstance(node, ast.BinOp):
-            left = visit(node.left, depth + 1)
             if isinstance(node.op, ast.Pow):
-                return np.power(left, literal(node.right))
-            right = visit(node.right, depth + 1)
+                return np.power(visit(node.left, depth + 1), literal(node.right))
             operations = {ast.Add: np.add, ast.Sub: np.subtract, ast.Mult: np.multiply, ast.Div: np.divide}
             operation = operations.get(type(node.op))
-            if operation is not None:
-                return operation(left, right)
+            if operation is None:
+                raise ToolInputError("Unsupported arithmetic operator; use +, -, *, /, ** or ^ for powers")
+            return operation(visit(node.left, depth + 1), visit(node.right, depth + 1))
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in functions and len(node.args) == 1 and not node.keywords:
                 return functions[node.func.id](visit(node.args[0], depth + 1))
